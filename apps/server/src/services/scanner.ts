@@ -169,6 +169,15 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
       return;
     }
 
+    const audioEntries = entries.filter(
+      (entry) => entry.isFile() && AUDIO_EXTENSIONS.has(path.extname(entry.name).toLowerCase())
+    );
+
+    if (audioEntries.length > 0) {
+      status.totalFiles += audioEntries.length;
+      updateProgress();
+    }
+
     for (const entry of entries) {
       const fullPath = path.join(root, entry.name);
 
@@ -190,9 +199,6 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
       if (!AUDIO_EXTENSIONS.has(extension)) {
         continue;
       }
-
-      status.totalFiles += 1;
-      updateProgress();
       status.currentPhase = "reading";
       status.currentFilePath = fullPath;
 
