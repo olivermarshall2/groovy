@@ -17,15 +17,9 @@ type ScannerDependencies = {
 
 const AUDIO_EXTENSIONS = new Set([".mp3", ".flac", ".m4b"]);
 const MAX_RECENT_ERRORS = 20;
+const FILE_OPERATION_TIMEOUT_MS = 20_000;
 
 const uniqueRoots = (roots: string[]) => [...new Set(roots.map((root) => root.trim()).filter(Boolean))];
-
-const isPathInsideRoot = (filePath: string, rootPath: string) => {
-  const normalizedFilePath = normalizeMediaPath(filePath).replace(/\/+$/, "");
-  const normalizedRoot = normalizeMediaPath(rootPath).replace(/\/+$/, "");
-
-  return normalizedFilePath === normalizedRoot || normalizedFilePath.startsWith(`${normalizedRoot}/`);
-};
 
 const toArtifactTrack = (track: TrackRecord): ScannedTrackArtifact => ({
   filePath: track.filePath,
@@ -83,6 +77,9 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
     totalFiles: 0,
     progressPercent: 0,
     queued: false,
+    currentFilePath: null,
+    currentPhase: null,
+    lastProgressAt: null,
     recentErrors: []
   };
 
@@ -97,47 +94,90 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
     ].slice(0, MAX_RECENT_ERRORS);
   };
 
+  const markProgress = () => {
+    status.lastProgressAt = new Date().toISOString();
+  };
+
   const updateProgress = () => {
     status.progressPercent =
       status.totalFiles > 0
         ? Math.min(100, Math.round((status.processedFiles / status.totalFiles) * 100))
         : 0;
+    markProgress();
   };
 
-  const countAudioFiles = async (root: string): Promise<number> => {
-    const entries = await readdir(root, { withFileTypes: true });
-    let count = 0;
+  const withTimeout = async <T>(operation: Promise<T>, timeoutMs: number, label: string, filePath: string) => {
+    let timeoutHandle: NodeJS.Timeout | undefined;
 
-    for (const entry of entries) {
-      const fullPath = path.join(root, entry.name);
-
-      if (entry.isDirectory()) {
-        count += await countAudioFiles(fullPath);
-        continue;
+    try {
+      return await Promise.race([
+        operation,
+        new Promise<T>((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            reject(new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s`));
+          }, timeoutMs);
+        })
+      ]);
+    } catch (error) {
+      if (error instanceof Error) {
+        error.message = `${error.message} (${filePath})`;
       }
-
-      if (entry.isFile() && AUDIO_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
-        count += 1;
+      throw error;
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
       }
     }
-
-    return count;
   };
+
+  const readDirectoryEntries = (targetPath: string) =>
+    withTimeout(readdir(targetPath, { withFileTypes: true }), FILE_OPERATION_TIMEOUT_MS, "Directory read", targetPath);
+
+  const readFileStats = (targetPath: string) =>
+    withTimeout(stat(targetPath), FILE_OPERATION_TIMEOUT_MS, "File stat", targetPath);
+
+  const readMetadataWithTimeout = (filePath: string, libraryRoot?: string) =>
+    withTimeout(readAudioMetadata(filePath, libraryRoot), FILE_OPERATION_TIMEOUT_MS, "Metadata read", filePath);
+
+  const readFolderCoverArtModifiedAtWithTimeout = (filePath: string, libraryRoot?: string) =>
+    withTimeout(getFolderCoverArtModifiedAt(filePath, libraryRoot), FILE_OPERATION_TIMEOUT_MS, "Cover art stat", filePath);
+
+  const readFolderCoverArtWithTimeout = (filePath: string, libraryRoot?: string) =>
+    withTimeout(readFolderCoverArt(filePath, libraryRoot), FILE_OPERATION_TIMEOUT_MS, "Cover art read", filePath);
 
   const scanFolder = async (
     root: string,
     libraryRoot: string,
     collectedTracks: ScannedTrackArtifact[],
-    seenPathsSet?: Set<string>
+    seenPathsSet?: Set<string>,
+    options?: {
+      forceMediaKind?: "music" | "book";
+      folderCoverArtCache?: Map<string, Awaited<ReturnType<typeof readFolderCoverArt>>>;
+      folderCoverArtModifiedCache?: Map<string, string | null>;
+    }
   ) => {
-    const folderCoverArtCache = new Map<string, Awaited<ReturnType<typeof readFolderCoverArt>>>();
-    const entries = await readdir(root, { withFileTypes: true });
+    const folderCoverArtCache = options?.folderCoverArtCache ?? new Map<string, Awaited<ReturnType<typeof readFolderCoverArt>>>();
+    const folderCoverArtModifiedCache = options?.folderCoverArtModifiedCache ?? new Map<string, string | null>();
+    let entries;
+
+    try {
+      status.currentPhase = "discovering";
+      status.currentFilePath = root;
+      entries = await readDirectoryEntries(root);
+    } catch (error) {
+      pushError(root, error instanceof Error ? error.message : "Failed to read directory");
+      return;
+    }
 
     for (const entry of entries) {
       const fullPath = path.join(root, entry.name);
 
       if (entry.isDirectory()) {
-        await scanFolder(fullPath, libraryRoot, collectedTracks, seenPathsSet);
+        await scanFolder(fullPath, libraryRoot, collectedTracks, seenPathsSet, {
+          forceMediaKind: options?.forceMediaKind,
+          folderCoverArtCache,
+          folderCoverArtModifiedCache
+        });
         continue;
       }
 
@@ -151,7 +191,22 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
         continue;
       }
 
-      const fileStats = await stat(fullPath);
+      status.totalFiles += 1;
+      updateProgress();
+      status.currentPhase = "reading";
+      status.currentFilePath = fullPath;
+
+      let fileStats;
+
+      try {
+        fileStats = await readFileStats(fullPath);
+      } catch (error) {
+        pushError(fullPath, error instanceof Error ? error.message : "Failed to stat file");
+        status.processedFiles += 1;
+        updateProgress();
+        continue;
+      }
+
       const normalizedPath = normalizeMediaPath(fullPath);
 
       if (seenPathsSet) {
@@ -161,22 +216,42 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
       seenPaths.add(normalizedPath);
 
       let metadata;
-      const appSettings = repository.getAppSettings();
-      const forcedBook = appSettings.bookRoots.some((bookRoot) => isPathInsideRoot(fullPath, bookRoot));
+      const forcedBook = options?.forceMediaKind === "book";
       const existingTrack = repository.getTrackByFilePath(fullPath);
       const fileModifiedAt = fileStats.mtime.toISOString();
-      const coverArtModifiedAt = await getFolderCoverArtModifiedAt(fullPath, libraryRoot);
+      const folderPath = path.dirname(fullPath);
+      let coverArtModifiedAt = folderCoverArtModifiedCache.get(folderPath);
+
+      if (coverArtModifiedAt === undefined) {
+        try {
+          coverArtModifiedAt = await readFolderCoverArtModifiedAtWithTimeout(fullPath, libraryRoot);
+        } catch (error) {
+          coverArtModifiedAt = null;
+          pushError(fullPath, error instanceof Error ? error.message : "Failed to read cover art timestamp");
+        }
+
+        folderCoverArtModifiedCache.set(folderPath, coverArtModifiedAt);
+      }
+
       const effectiveModifiedAt = getEffectiveModifiedAt(fileModifiedAt, coverArtModifiedAt);
-      const cachedFolderCoverArt = folderCoverArtCache.get(fullPath);
-      const currentFolderCoverArt = cachedFolderCoverArt === undefined ? await readFolderCoverArt(fullPath, libraryRoot) : cachedFolderCoverArt;
+      const cachedFolderCoverArt = folderCoverArtCache.get(folderPath);
+      let currentFolderCoverArt: Awaited<ReturnType<typeof readFolderCoverArt>> | null = cachedFolderCoverArt ?? null;
+
       if (cachedFolderCoverArt === undefined) {
-        folderCoverArtCache.set(fullPath, currentFolderCoverArt);
+        try {
+          currentFolderCoverArt = await readFolderCoverArtWithTimeout(fullPath, libraryRoot);
+        } catch (error) {
+          currentFolderCoverArt = null;
+          pushError(fullPath, error instanceof Error ? error.message : "Failed to read folder cover art");
+        }
+
+        folderCoverArtCache.set(folderPath, currentFolderCoverArt);
       }
       let preloadedMetadata: Awaited<ReturnType<typeof readAudioMetadata>> | null = null;
 
       if (forcedBook && extension === ".m4b") {
         try {
-          preloadedMetadata = await readAudioMetadata(fullPath, libraryRoot);
+          preloadedMetadata = await readMetadataWithTimeout(fullPath, libraryRoot);
         } catch {
           preloadedMetadata = null;
         }
@@ -199,7 +274,7 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
         existingTrack &&
         existingTrack.modifiedAt === effectiveModifiedAt &&
         existingTrack.sizeBytes === fileStats.size &&
-        (forcedBook ? existingTrack.mediaKind === "book" : existingTrack.mediaKind === "music") &&
+        (options?.forceMediaKind ? existingTrack.mediaKind === options.forceMediaKind : true) &&
         !bookFolderCoverChanged;
 
       if (unchangedTrack) {
@@ -213,7 +288,7 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
         metadata = preloadedMetadata;
       } else {
         try {
-          metadata = await readAudioMetadata(fullPath, libraryRoot);
+          metadata = await readMetadataWithTimeout(fullPath, libraryRoot);
         } catch (error) {
           metadata = {
             title: null,
@@ -289,6 +364,9 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
     status.processedFiles = 0;
     status.totalFiles = 0;
     status.progressPercent = 0;
+    status.currentFilePath = null;
+    status.currentPhase = "discovering";
+    status.lastProgressAt = status.lastStartedAt;
     seenPaths.clear();
     const settings = repository.getAppSettings();
 
@@ -298,24 +376,21 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
       for (const root of scanRoots) {
         try {
           await access(root);
-          status.totalFiles += await countAudioFiles(root);
-        } catch {
-          continue;
-        }
-      }
-
-      for (const root of scanRoots) {
-        try {
-          await access(root);
         } catch {
           continue;
         }
 
         const collectedTracks: ScannedTrackArtifact[] = [];
-        await scanFolder(root, root, collectedTracks, seenPaths);
         const isBookRoot = settings.bookRoots.some((bookRoot) => normalizeMediaPath(bookRoot) === normalizeMediaPath(root));
+        await scanFolder(root, root, collectedTracks, seenPaths, {
+          forceMediaKind: isBookRoot ? "book" : "music",
+          folderCoverArtCache: new Map(),
+          folderCoverArtModifiedCache: new Map()
+        });
 
         if (!isBookRoot) {
+          status.currentPhase = "finalizing";
+          status.currentFilePath = root;
           await syncLibraryArtifacts({
             root,
             tracks: collectedTracks,
@@ -326,6 +401,8 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
       }
 
       repository.pruneMissingTracks(scanRoots, seenPaths);
+      status.currentPhase = "finalizing";
+      status.currentFilePath = "book-state-sidecars";
       await restoreBookStateSidecars(repository);
       for (const bookId of repository.listTrackedBookIds()) {
         await persistBookStateSidecar(repository, bookId);
@@ -339,6 +416,9 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
       status.currentReason = null;
       status.lastCompletedAt = new Date().toISOString();
       status.progressPercent = status.totalFiles > 0 ? 100 : 0;
+      status.currentFilePath = null;
+      status.currentPhase = null;
+      status.lastProgressAt = status.lastCompletedAt;
       activeScan = null;
       status.queued = queuedReason !== null;
 
@@ -362,23 +442,31 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
     status.processedFiles = 0;
     status.totalFiles = 0;
     status.progressPercent = 0;
+    status.currentFilePath = null;
+    status.currentPhase = "discovering";
+    status.lastProgressAt = status.lastStartedAt;
 
     const seenFolderPaths = new Set<string>();
 
     try {
       try {
         await access(folderPath);
-        status.totalFiles = await countAudioFiles(folderPath);
       } catch {
         return;
       }
 
       const collectedTracks: ScannedTrackArtifact[] = [];
       const settings = repository.getAppSettings();
-      await scanFolder(folderPath, folderPath, collectedTracks, seenFolderPaths);
       const isBookFolderScan = settings.bookRoots.some((bookRoot) => normalizeMediaPath(bookRoot) === normalizeMediaPath(folderPath));
+      await scanFolder(folderPath, folderPath, collectedTracks, seenFolderPaths, {
+        forceMediaKind: isBookFolderScan ? "book" : "music",
+        folderCoverArtCache: new Map(),
+        folderCoverArtModifiedCache: new Map()
+      });
 
       if (!isBookFolderScan) {
+        status.currentPhase = "finalizing";
+        status.currentFilePath = folderPath;
         await syncLibraryArtifacts({
           root: folderPath,
           tracks: collectedTracks,
@@ -387,6 +475,8 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
         });
       }
       repository.pruneMissingTracksInFolder(folderPath, seenFolderPaths);
+      status.currentPhase = "finalizing";
+      status.currentFilePath = "book-state-sidecars";
       await restoreBookStateSidecars(repository);
       for (const bookId of repository.listTrackedBookIds()) {
         await persistBookStateSidecar(repository, bookId);
@@ -400,6 +490,9 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
       status.currentReason = null;
       status.lastCompletedAt = new Date().toISOString();
       status.progressPercent = status.totalFiles > 0 ? 100 : 0;
+      status.currentFilePath = null;
+      status.currentPhase = null;
+      status.lastProgressAt = status.lastCompletedAt;
     }
   };
 

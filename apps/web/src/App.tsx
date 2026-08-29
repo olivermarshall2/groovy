@@ -1363,6 +1363,14 @@ const SettingsForm = ({
 
     return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   })();
+  const currentScanPhaseLabel =
+    scan.currentPhase === "discovering"
+      ? "Discovering files"
+      : scan.currentPhase === "reading"
+        ? "Reading metadata"
+        : scan.currentPhase === "finalizing"
+          ? "Finalizing scan"
+          : null;
 
   return (
     <form
@@ -1397,6 +1405,12 @@ const SettingsForm = ({
           </span>
           {scan.queued ? <span>Another scan is queued</span> : null}
         </div>
+        {scan.isScanning && (currentScanPhaseLabel || scan.currentFilePath) ? (
+          <div className="scan-status-row muted">
+            <span>{currentScanPhaseLabel ?? "Working"}</span>
+            <span title={scan.currentFilePath ?? undefined}>{scan.currentFilePath ?? ""}</span>
+          </div>
+        ) : null}
         <div className="scan-progress-bar" aria-hidden="true">
           <div className="scan-progress-fill" style={{ width: `${scan.progressPercent}%` }} />
         </div>

@@ -198,6 +198,9 @@ export type ScanStatus = {
   totalFiles: number;
   progressPercent: number;
   queued: boolean;
+  currentFilePath: string | null;
+  currentPhase: "discovering" | "reading" | "finalizing" | null;
+  lastProgressAt: string | null;
   recentErrors: ScanError[];
 };
 

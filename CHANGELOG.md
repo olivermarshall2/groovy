@@ -2,6 +2,13 @@
 
 All notable project changes should be recorded here. Keep the newest entry at the top.
 
+## Unreleased
+
+### Changed
+
+- Hardened large network folder scans by avoiding a separate pre-count pass and reporting scan phase/file progress as files are discovered.
+- Added scanner timeouts and error handling around slow directory, file stat, metadata, and cover-art reads so problematic network entries do not stall the whole scan.
+
 ## 0.17.0 - 2026-08-29
 
 ### Added
