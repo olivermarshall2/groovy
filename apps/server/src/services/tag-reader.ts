@@ -318,6 +318,8 @@ export const readAudioMetadata = async (filePath: string, libraryRoot?: string):
   const musicBrainzArtistId = toArray(native.musicbrainz_artistid)[0] ?? null;
   const musicBrainzAlbumArtistId = toArray(native.musicbrainz_albumartistid)[0] ?? null;
   const inferredBook = inferBookMetadata(filePath, metadata, libraryRoot);
+  // Audiobooks use the track Artist tag as the book Author.
+  // Album Artist remains available separately and is treated as the narrator-facing field by clients.
   const resolvedAuthor = inferredBook.mediaKind === "book" ? artist : (authorValues[0] ?? null);
 
   return {

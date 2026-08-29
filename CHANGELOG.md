@@ -9,6 +9,7 @@ All notable project changes should be recorded here. Keep the newest entry at th
 - Hardened large network folder scans by avoiding a separate pre-count pass and reporting scan phase/file progress as files are discovered.
 - Added scanner timeouts and error handling around slow directory, file stat, metadata, and cover-art reads so problematic network entries do not stall the whole scan.
 - Improved scan progress accounting by counting audio files per discovered folder before metadata reads begin.
+- Updated audiobook metadata handling so book authors are derived from the Artist tag while Album Artist remains available for narrator-oriented client display.
 
 ## 0.17.0 - 2026-08-29
 

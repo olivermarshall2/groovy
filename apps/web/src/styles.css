@@ -1677,6 +1677,10 @@ button {
   padding: 0;
 }
 
+.scan-details-toggle {
+  font: inherit;
+}
+
 .scan-errors-pane {
   background: rgba(9, 11, 13, 0.45);
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -1686,6 +1690,21 @@ button {
   max-height: 180px;
   overflow: auto;
   padding: 0.85rem;
+}
+
+.scan-details-current {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.scan-details-current strong {
+  color: #fff2e0;
+}
+
+.scan-details-current span {
+  color: var(--muted);
+  font-size: 0.9rem;
+  word-break: break-word;
 }
 
 .scan-errors-pane p {

@@ -5,6 +5,8 @@ import {
   BookmarkCheck,
   CircleCheck,
   Check,
+  ChevronDown,
+  ChevronUp,
   Clock3,
   Copy,
   EllipsisVertical,
@@ -576,7 +578,8 @@ const getLatestMeaningfulBookmark = (
   return [...meaningfulBookmarks].sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
 };
 
-const getTrackDisplayArtist = (track: TrackRecord) => track.author ?? track.artist ?? "Unknown artist";
+const getTrackDisplayArtist = (track: TrackRecord) =>
+  track.bookId ? track.artist ?? track.author ?? "Unknown artist" : track.author ?? track.artist ?? "Unknown artist";
 
 const getBookCardGenre = (book: BookWithTracks) => {
   const genres = [...new Set(
@@ -770,7 +773,7 @@ const getBookCardResumeLabel = (book: BookWithTracks) => {
 };
 
 const getBookDisplayAuthor = (book: Pick<BookRecord, "author">, tracks: TrackRecord[]) =>
-  tracks.find((track) => track.artist)?.artist ?? book.author;
+  tracks.find((track) => track.bookId && track.artist)?.artist ?? tracks.find((track) => track.artist)?.artist ?? book.author;
 
 const buildBookGroups = (books: BookRecord[], tracks: TrackRecord[]) =>
   books.map<BookWithTracks>((book) => {
@@ -1295,7 +1298,7 @@ const SettingsForm = ({
   const [rootPath, setRootPath] = useState(initialLibraryRoot);
   const [bookRootPath, setBookRootPath] = useState(initialBookRoot);
   const [scanIntervalMinutes, setScanIntervalMinutes] = useState(String(initialSettings.scanIntervalMinutes));
-  const [showErrors, setShowErrors] = useState(false);
+  const [showScanDetails, setShowScanDetails] = useState(false);
   const [scanElapsedMs, setScanElapsedMs] = useState(0);
   const [scanTarget, setScanTarget] = useState<"music" | "books" | null>(null);
 
@@ -1405,22 +1408,24 @@ const SettingsForm = ({
           </span>
           {scan.queued ? <span>Another scan is queued</span> : null}
         </div>
-        {scan.isScanning && (currentScanPhaseLabel || scan.currentFilePath) ? (
-          <div className="scan-status-row muted">
-            <span>{currentScanPhaseLabel ?? "Working"}</span>
-            <span title={scan.currentFilePath ?? undefined}>{scan.currentFilePath ?? ""}</span>
-          </div>
-        ) : null}
         <div className="scan-progress-bar" aria-hidden="true">
           <div className="scan-progress-fill" style={{ width: `${scan.progressPercent}%` }} />
         </div>
         <div className="scan-actions-row">
-          <button type="button" className="ghost-inline-button" onClick={() => setShowErrors((previous) => !previous)}>
-            {showErrors ? "Hide scan issues" : `Show scan issues (${scan.recentErrors.length})`}
+          <button type="button" className="ghost-inline-button scan-details-toggle inline-flex items-center gap-2" onClick={() => setShowScanDetails((previous) => !previous)}>
+            {showScanDetails ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            <span>Details</span>
+            <span>({scan.recentErrors.length} issues)</span>
           </button>
         </div>
-        {showErrors ? (
+        {showScanDetails ? (
           <div className="scan-errors-pane">
+            {scan.isScanning && (currentScanPhaseLabel || scan.currentFilePath) ? (
+              <div className="scan-details-current">
+                <strong>{currentScanPhaseLabel ?? "Working"}</strong>
+                <span title={scan.currentFilePath ?? undefined}>{scan.currentFilePath ?? ""}</span>
+              </div>
+            ) : null}
             {scan.recentErrors.length === 0 ? (
               <p>No recent scan errors.</p>
             ) : (

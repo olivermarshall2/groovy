@@ -218,6 +218,12 @@ type PersistedBookProgressEntry = {
   updatedAt: string;
 };
 
+const getBookTrackAuthor = (track: Pick<TrackRecord, "bookId" | "artist" | "author">) =>
+  track.bookId ? track.artist ?? track.author ?? null : track.author ?? track.artist ?? null;
+
+const getBookNarrator = (track: Pick<TrackRecord, "bookId" | "albumArtist" | "artist">) =>
+  track.bookId ? track.albumArtist ?? null : null;
+
 type PersistedLastListenedEntity = {
   kind: "album" | "book" | "playlist";
   id: string;
@@ -1179,7 +1185,7 @@ const AppBody = () => {
     () =>
       currentItem?.type === "artist"
         ? tracks.filter(
-            (track) => track.author === currentItem.id || track.artist === currentItem.id || track.albumArtist === currentItem.id
+            (track) => getBookTrackAuthor(track) === currentItem.id || track.artist === currentItem.id || track.albumArtist === currentItem.id
           )
         : [],
     [currentItem, tracks]
@@ -1356,7 +1362,7 @@ const AppBody = () => {
 
   const buildLockScreenMetadata = (track: TrackRecord, artworkUrl?: string | null) => ({
     title: track.title ?? "Untitled track",
-    artist: track.author ?? track.artist ?? undefined,
+    artist: getBookTrackAuthor(track) ?? undefined,
     albumTitle: track.bookTitle ?? track.album ?? undefined,
     artworkUrl: artworkUrl ?? undefined
   });
@@ -5676,7 +5682,7 @@ const AppBody = () => {
                       key={track.id}
                       leadingLabel={`${track.trackNumber ?? index + 1}.`}
                       title={track.title ?? "Untitled track"}
-                      subtitle={track.author ?? track.artist ?? ""}
+                      subtitle={getBookTrackAuthor(track) ?? ""}
                       trailing={track.bookId ? null : formatTrackTime(track.durationSeconds)}
                       isActive={currentTrack?.id === track.id}
                       isPlaying={isPlaying}
