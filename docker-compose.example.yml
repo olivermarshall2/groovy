@@ -1,0 +1,37 @@
+services:
+  mp3-platform:
+    image: ghcr.io/olivermarshall2/groovy:latest
+    container_name: mp3-platform
+    restart: unless-stopped
+    expose:
+      - "4318"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 4318
+      DATABASE_PATH: /data/library.db
+      SCAN_INTERVAL_MINUTES: 15
+      MUSIC_LIBRARY_ROOTS: ${MUSIC_LIBRARY_ROOTS:-/music}
+      AUDIOBOOK_LIBRARY_ROOTS: ${AUDIOBOOK_LIBRARY_ROOTS:-/audiobooks}
+      SUBSONIC_USERNAME: symfonium
+      SUBSONIC_PASSWORD: change-me
+      SUBSONIC_API_KEY: change-me
+      DISCOGS_USER_TOKEN: ""
+      DISCOGS_CONSUMER_KEY: ""
+      DISCOGS_CONSUMER_SECRET: ""
+    volumes:
+      - mp3-platform-data:/data
+      - type: bind
+        source: ${MUSIC_HOST_PATH:-/srv/groovy/music}
+        target: ${MUSIC_CONTAINER_PATH:-/music}
+      - type: bind
+        source: ${AUDIOBOOK_HOST_PATH:-/srv/groovy/audiobooks}
+        target: ${AUDIOBOOK_CONTAINER_PATH:-/audiobooks}
+    networks:
+      - mp3-platform
+
+volumes:
+  mp3-platform-data:
+
+networks:
+  mp3-platform:
+    driver: bridge

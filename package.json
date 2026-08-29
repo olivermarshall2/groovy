@@ -1,0 +1,27 @@
+{
+  "name": "mp3-platform",
+  "private": true,
+  "version": "0.17.0",
+  "packageManager": "pnpm@10.29.1",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm --parallel --filter @mp3-platform/server --filter @mp3-platform/web dev",
+    "dev:android": "pnpm --filter @mp3-platform/android dev",
+    "android": "pnpm --filter @mp3-platform/android android",
+    "serve": "node apps/server/dist/index.js",
+    "start": "pnpm build && node apps/server/dist/index.js",
+    "server:start": "node scripts/server-control.cjs start",
+    "server:stop": "node scripts/server-control.cjs stop",
+    "server:restart": "node scripts/server-control.cjs restart",
+    "server:status": "node scripts/server-control.cjs status",
+    "preview:mobile": "node scripts/mobile-preview.cjs",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "pnpm": {
+    "overrides": {
+      "react": "19.0.0",
+      "react-dom": "19.0.0"
+    }
+  }
+}

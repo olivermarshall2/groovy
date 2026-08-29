@@ -1,0 +1,45 @@
+{
+  "name": "@mp3-platform/android",
+  "version": "0.17.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "dev": "expo start",
+    "android": "expo run:android",
+    "apk": "powershell -ExecutionPolicy Bypass -File .\\scripts\\build-apk.ps1",
+    "apk:debug": "cd android && gradlew.bat assembleDebug",
+    "apk:release": "cd android && gradlew.bat assembleRelease",
+    "apk:bundle": "cd android && gradlew.bat bundleRelease",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "ios": "expo run:ios"
+  },
+  "dependencies": {
+    "@babel/runtime": "^7.29.7",
+    "@expo/vector-icons": "^14.1.0",
+    "@mp3-platform/shared": "workspace:*",
+    "@react-native-async-storage/async-storage": "^2.2.0",
+    "@sentry/react-native": "^8.18.0",
+    "expo": "~53.0.20",
+    "expo-asset": "11.1.7",
+    "expo-audio": "workspace:*",
+    "expo-av": "~15.1.7",
+    "expo-constants": "17.1.7",
+    "expo-file-system": "~18.1.11",
+    "expo-keep-awake": "~14.1.4",
+    "expo-linear-gradient": "~14.1.5",
+    "expo-modules-core": "2.5.0",
+    "expo-status-bar": "~2.2.3",
+    "invariant": "^2.2.4",
+    "lucide-react-native": "1.24.0",
+    "react": "19.0.0",
+    "react-native": "0.79.5",
+    "react-native-safe-area-context": "^5.4.0",
+    "react-native-svg": "^15.15.5",
+    "react-native-track-player": "4.1.2"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "typescript": "^5.9.2"
+  }
+}

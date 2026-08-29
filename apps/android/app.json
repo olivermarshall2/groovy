@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "Groovy",
+    "slug": "mp3-platform-android",
+    "scheme": "mp3platform",
+    "version": "0.17.0",
+    "icon": "./assets/groovy-icon.png",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "plugins": [
+      [
+        "expo-audio",
+        {
+          "enableBackgroundPlayback": true,
+          "enableBackgroundRecording": false
+        }
+      ]
+    ],
+    "android": {
+      "package": "com.mp3platform.android",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/groovy-icon.png",
+        "backgroundColor": "#0b0908"
+      }
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ]
+  }
+}
