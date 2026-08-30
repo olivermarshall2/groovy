@@ -1,6 +1,7 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { TrackRecord } from "@mp3-platform/shared";
+import { normalizeGenreLabels, normalizeGenreValue } from "./genre.js";
 
 export type TrackMetadata = Omit<
   TrackRecord,
@@ -272,7 +273,7 @@ const getNativeTagValues = (metadata: ParsedMetadata, keys: Set<string>) => {
 };
 
 const inferBookMetadata = (filePath: string, metadata: ParsedMetadata, libraryRoot?: string) => {
-  const genres = uniqueValues(metadata.common.genre ?? []).map((genre) => genre.toLowerCase());
+  const genres = normalizeGenreLabels(uniqueValues(metadata.common.genre ?? [])).map((genre) => genre.toLowerCase());
   const authorValues = uniqueValues([
     ...(metadata.common as { author?: string | string[] }).author ? toArray((metadata.common as { author?: string | string[] }).author) : [],
     ...getNativeAuthorValues(metadata)
@@ -331,7 +332,7 @@ export const readAudioMetadata = async (filePath: string, libraryRoot?: string):
     artist,
     album: metadata.common.album ?? null,
     albumArtist,
-    genre: uniqueValues(metadata.common.genre ?? []).join(", ") || null,
+    genre: normalizeGenreValue(uniqueValues(metadata.common.genre ?? []).join(", ")),
     year: metadata.common.year ?? null,
     discNumber: metadata.common.disk?.no ?? null,
     trackNumber: metadata.common.track?.no ?? null,

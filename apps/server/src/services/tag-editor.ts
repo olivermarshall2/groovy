@@ -5,6 +5,7 @@ import type { TrackRecord } from "@mp3-platform/shared";
 import type { DiscogsAuth } from "./discogs.js";
 import { type ScannedTrackArtifact, syncLibraryArtifacts } from "./library-artifacts.js";
 import { persistBookStateSidecar } from "./book-state-sidecar.js";
+import { normalizeGenreValue } from "./genre.js";
 import { getFolderCoverArtModifiedAt, readAudioMetadata, readFolderCoverArt } from "./tag-reader.js";
 import type { LibraryRepository } from "../storage/library-repository.js";
 import { normalizeMediaPath } from "../storage/ids.js";
@@ -254,6 +255,7 @@ export const updateAlbumTags = async (
   logger: Logger
 ) => {
   const tracks = repository.listTracksByAlbumGroup(albumId);
+  const normalizedGenre = normalizeGenreValue(changes.genre);
 
   if (tracks.length === 0) {
     return null;
@@ -264,7 +266,7 @@ export const updateAlbumTags = async (
       artist: changes.artist,
       album_artist: changes.albumArtist,
       album: changes.album,
-      genre: changes.genre,
+      genre: normalizedGenre,
       date: changes.year ? String(changes.year) : null,
       year: changes.year ? String(changes.year) : null
     });

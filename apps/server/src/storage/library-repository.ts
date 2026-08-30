@@ -14,6 +14,7 @@ import type {
   TrackRecord
 } from "@mp3-platform/shared";
 import { createSessionExpiry, createSessionToken, hashPassword, hashSessionToken, verifyPassword } from "../services/auth.js";
+import { normalizeGenreValue } from "../services/genre.js";
 import { openLibraryDatabase } from "./schema.js";
 import { createStableId, normalizeMediaPath } from "./ids.js";
 
@@ -90,7 +91,7 @@ const mapTrackRow = (row: Record<string, unknown>): TrackRecord => ({
   albumId: String(row.album_id),
   albumArtist: row.album_artist ? String(row.album_artist) : null,
   albumArtistId: String(row.album_artist_id),
-  genre: row.genre ? String(row.genre) : null,
+  genre: normalizeGenreValue(row.genre ? String(row.genre) : null),
   year: typeof row.year === "number" ? row.year : null,
   discNumber: typeof row.disc_number === "number" ? row.disc_number : null,
   trackNumber: typeof row.track_number === "number" ? row.track_number : null,
@@ -937,6 +938,7 @@ export const createLibraryRepository = (databasePath: string) => {
       const bookId = mediaKind === "book" && bookTitle ? createBookId(bookAuthorName, bookTitle) : null;
       const id = createStableId("track", normalizedFilePath);
       const coverArtId = track.coverArtData ? (mediaKind === "book" ? bookId : albumId) : null;
+      const normalizedGenre = normalizeGenreValue(track.genre);
 
       insertTrack.run(
         id,
@@ -954,7 +956,7 @@ export const createLibraryRepository = (databasePath: string) => {
         albumId,
         track.albumArtist,
         albumArtistId,
-        track.genre,
+        normalizedGenre,
         track.year,
         track.discNumber,
         track.trackNumber,

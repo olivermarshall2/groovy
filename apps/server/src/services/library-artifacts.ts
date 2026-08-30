@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { access, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { downloadDiscogsReleaseCoverArt, searchDiscogsAlbumCandidates, type DiscogsAuth } from "./discogs.js";
+import { normalizeGenreLabels, normalizeGenreValue } from "./genre.js";
 import { downloadMusicBrainzReleaseCoverArt, lookupMusicBrainzArtist, lookupMusicBrainzRelease } from "./musicbrainz.js";
 import { lookupTheAudioDbAlbumArtwork, lookupTheAudioDbAlbumDescription } from "./theaudiodb.js";
 
@@ -360,7 +361,7 @@ const renderAlbumNfo = (album: {
 
 const renderArtistNfo = (artistFolderName: string, albums: Array<{ title: string; year: number | null; runtimeMinutes: number; genre: string | null }>, outline: string | null) => {
   const totalRuntime = albums.reduce((total, album) => total + album.runtimeMinutes, 0);
-  const genre = uniqueValues(albums.map((album) => album.genre)).join(", ") || "Other";
+  const genre = normalizeGenreLabels(albums.map((album) => album.genre)).join(", ") || "Other";
   const albumNodes = albums
     .sort((left, right) => (left.year ?? 0) - (right.year ?? 0) || left.title.localeCompare(right.title))
     .map(
@@ -489,7 +490,7 @@ export const syncLibraryArtifacts = async ({ root, tracks, pushError, discogsAut
         const releaseInfo = await lookupMusicBrainzRelease(firstTrack?.musicBrainzReleaseId ?? null);
         const resolvedTitle = releaseInfo?.title ?? title;
         const year = releaseInfo?.year ?? sortedTracks.find((track) => track.year)?.year ?? null;
-        const genre = releaseInfo?.genre ?? (uniqueValues(sortedTracks.map((track) => track.genre)).join(", ") || null);
+        const genre = normalizeGenreValue(releaseInfo?.genre ?? (uniqueValues(sortedTracks.map((track) => track.genre)).join(", ") || null));
         const artist = firstTrack?.artist ?? albumArtist;
         const albumDescription =
           existingReview ??
@@ -592,7 +593,7 @@ export const identifyAlbumArtifacts = async ({ root, tracks, pushError, discogsA
       const releaseInfo = await lookupMusicBrainzRelease(firstTrack?.musicBrainzReleaseId ?? null);
       const resolvedTitle = releaseInfo?.title ?? title;
       const year = releaseInfo?.year ?? sortedTracks.find((track) => track.year)?.year ?? null;
-      const genre = releaseInfo?.genre ?? (uniqueValues(sortedTracks.map((track) => track.genre)).join(", ") || null);
+      const genre = normalizeGenreValue(releaseInfo?.genre ?? (uniqueValues(sortedTracks.map((track) => track.genre)).join(", ") || null));
       const artist = firstTrack?.artist ?? albumArtist;
       const albumDescription =
         (await lookupTheAudioDbAlbumDescription(albumArtist, resolvedTitle)) ??

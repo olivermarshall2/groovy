@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { AlbumDetailRecord, AlbumRecord, TrackRecord } from "@mp3-platform/shared";
+import { normalizeGenreValue } from "./genre.js";
 
 const decodeXml = (value: string) =>
   value
@@ -45,7 +46,7 @@ export const readAlbumDetailFromNfo = async (album: AlbumRecord, tracks: TrackRe
     album,
     tracks,
     year: extractNumberTag(albumNfo ?? "", "year") ?? tracks.find((track) => track.year)?.year ?? null,
-    genre: extractTag(albumNfo ?? "", "genre") ?? tracks.find((track) => track.genre)?.genre ?? null,
+    genre: normalizeGenreValue(extractTag(albumNfo ?? "", "genre") ?? tracks.find((track) => track.genre)?.genre ?? null),
     review: extractTag(albumNfo ?? "", "review"),
     outline: extractTag(albumNfo ?? "", "outline"),
     artistBiography: extractTag(artistNfo ?? "", "biography"),
