@@ -6,6 +6,8 @@ All notable project changes should be recorded here. Keep the newest entry at th
 
 ### Changed
 
+- Tightened the OpenSubsonic genre normalization pass so strict builds keep the case-collapsed genre list logic type-safe and deployable.
+- Added a defensive web-side genre normalizer and normalized OpenSubsonic `getGenres` output so mixed-case genre labels are collapsed even when older cached or pre-normalized library data is still present.
 - Normalized library genres on the server so genre tags are deduplicated case-insensitively, stored and returned in a consistent sentence-case label, and reused across scans, NFO metadata, OpenSubsonic genre listings, and album-tag edits.
 - Fixed the web artwork loading placeholders so the new shared cover frame inherits the correct size and aspect rules across Books, Library, Artists, playlists, track rows, and detail heroes instead of only showing reliably on the Home page.
 - Added shared artwork loading placeholders across the web app so hero art and entity cards show a shaped shimmering stand-in while cover images load instead of appearing blank.

@@ -497,6 +497,47 @@ const formatTrackTime = (seconds: number | null) => {
   return `${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
 };
 
+const normalizeGenreLabel = (value: string | null | undefined) => {
+  if (!value) {
+    return null;
+  }
+
+  const collapsed = value.replace(/\s+/g, " ").trim();
+
+  if (!collapsed) {
+    return null;
+  }
+
+  const lowerCased = collapsed.toLocaleLowerCase();
+  return `${lowerCased.charAt(0).toLocaleUpperCase()}${lowerCased.slice(1)}`;
+};
+
+const normalizeGenreLabels = (values: Array<string | null | undefined>) => {
+  const deduped = new Map<string, string>();
+
+  for (const value of values) {
+    if (!value) {
+      continue;
+    }
+
+    for (const part of value.split(",")) {
+      const normalized = normalizeGenreLabel(part);
+
+      if (!normalized) {
+        continue;
+      }
+
+      const key = normalized.toLocaleLowerCase();
+
+      if (!deduped.has(key)) {
+        deduped.set(key, normalized);
+      }
+    }
+  }
+
+  return [...deduped.values()];
+};
+
 const copyTextToClipboard = async (value: string) => {
   if (navigator.clipboard?.writeText) {
     try {
@@ -632,15 +673,7 @@ const getTrackDisplayArtist = (track: TrackRecord) =>
   track.bookId ? track.artist ?? track.author ?? "Unknown artist" : track.author ?? track.artist ?? "Unknown artist";
 
 const getBookCardGenre = (book: BookWithTracks) => {
-  const genres = [...new Set(
-    book.tracks
-      .flatMap((track) =>
-        (track.genre ?? "")
-          .split(",")
-          .map((value) => value.trim())
-          .filter(Boolean)
-      )
-  )];
+  const genres = normalizeGenreLabels(book.tracks.map((track) => track.genre));
 
   return genres[0] ?? "";
 };
@@ -2861,15 +2894,8 @@ export const App = () => {
     return filteredData.tracks;
   }, [filteredData, isLibraryView, libraryBrowseMode]);
   const libraryGenres = useMemo(() => {
-    return [...new Set(
-      libraryGenreSourceTracks
-        .flatMap((track) =>
-          (track.genre ?? "")
-            .split(",")
-            .map((value) => value.trim())
-            .filter(Boolean)
-        )
-    )].sort((left, right) => left.localeCompare(right));
+    return normalizeGenreLabels(libraryGenreSourceTracks.map((track) => track.genre))
+      .sort((left, right) => left.localeCompare(right));
   }, [libraryGenreSourceTracks]);
   useEffect(() => {
     if (selectedGenreFilter !== "all" && !libraryGenres.includes(selectedGenreFilter)) {
@@ -2888,10 +2914,7 @@ export const App = () => {
   }, [libraryBrowseMode]);
   const genreMatches = (track: TrackRecord) =>
     selectedGenreFilter === "all" ||
-    (track.genre ?? "")
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean)
+    normalizeGenreLabels([track.genre])
       .includes(selectedGenreFilter);
   const libraryAllTracks = useMemo(() => {
     if (!filteredData || !isLibraryView) {

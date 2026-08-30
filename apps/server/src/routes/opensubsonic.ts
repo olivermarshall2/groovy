@@ -6,6 +6,7 @@ import path from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { AlbumRecord, AppUser, ArtistRecord, BookRecord, TrackRecord } from "@mp3-platform/shared";
 import { persistBookStateSidecar } from "../services/book-state-sidecar.js";
+import { normalizeGenreLabel } from "../services/genre.js";
 import { readAlbumDetailFromNfo } from "../services/nfo-reader.js";
 
 const SUBSONIC_API_VERSION = "1.16.1";
@@ -945,25 +946,35 @@ export const registerOpenSubsonicRoutes = async (server: FastifyInstance) => {
           });
         }
         case "getGenres": {
-          const genreMap = new Map<string, number>();
+          const genreMap = new Map<string, { label: string; songCount: number }>();
 
           for (const track of server.appContext.repository.listTracks()) {
             const genres = (track.genre ?? "")
               .split(",")
-              .map((value) => value.trim())
-              .filter(Boolean);
+              .map((value) => normalizeGenreLabel(value))
+              .filter((value): value is string => Boolean(value));
 
             for (const genre of genres) {
-              genreMap.set(genre, (genreMap.get(genre) ?? 0) + 1);
+              const key = genre.toLocaleLowerCase();
+              const existing = genreMap.get(key);
+
+              if (existing) {
+                existing.songCount += 1;
+              } else {
+                genreMap.set(key, {
+                  label: genre,
+                  songCount: 1
+                });
+              }
             }
           }
 
           return sendSubsonicResponse(reply, params, {
             genres: {
-              genre: [...genreMap.entries()]
-                .sort(([left], [right]) => left.localeCompare(right))
-                .map(([value, songCount]) => ({
-                  value,
+              genre: [...genreMap.values()]
+                .sort((left, right) => left.label.localeCompare(right.label))
+                .map(({ label, songCount }) => ({
+                  value: label,
                   songCount,
                   albumCount: 0
                 }))
