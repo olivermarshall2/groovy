@@ -1,4 +1,5 @@
 import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
   ArrowLeft,
@@ -979,6 +980,70 @@ const buildPlaylists = (tracks: TrackRecord[], albums: AlbumWithTracks[], artist
 };
 
 const isTrackHeavyView = (view: ViewName) => ["search", "artist", "author", "liked", "recent", "recentlyAdded", "playlists", "playlist", "queue"].includes(view);
+
+const IncrementalGrid = <T,>({
+  items,
+  className,
+  batchSize,
+  initialBatchSize,
+  itemKey,
+  renderItem
+}: {
+  items: T[];
+  className: string;
+  batchSize: number;
+  initialBatchSize?: number;
+  itemKey: (item: T, index: number) => string;
+  renderItem: (item: T, index: number) => ReactNode;
+}) => {
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const resolvedInitialBatchSize = initialBatchSize ?? batchSize;
+  const [visibleCount, setVisibleCount] = useState(() => Math.min(items.length, resolvedInitialBatchSize));
+
+  useEffect(() => {
+    setVisibleCount(Math.min(items.length, resolvedInitialBatchSize));
+  }, [items, resolvedInitialBatchSize]);
+
+  useEffect(() => {
+    if (visibleCount >= items.length) {
+      return;
+    }
+
+    if (typeof IntersectionObserver === "undefined") {
+      setVisibleCount(items.length);
+      return;
+    }
+
+    const node = sentinelRef.current;
+
+    if (!node) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisibleCount((previous) => Math.min(items.length, previous + batchSize));
+        }
+      },
+      {
+        rootMargin: "480px 0px"
+      }
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [batchSize, items.length, visibleCount]);
+
+  return (
+    <div className={className}>
+      {items.slice(0, visibleCount).map((item, index) => (
+        <Fragment key={itemKey(item, index)}>{renderItem(item, index)}</Fragment>
+      ))}
+      {visibleCount < items.length ? <div ref={sentinelRef} className="incremental-grid-sentinel" aria-hidden="true" /> : null}
+    </div>
+  );
+};
 
 const AlbumArt = ({ coverArtId, alt, cacheBuster }: { coverArtId: string | null; alt: string; cacheBuster?: string | number }) => {
   const src = getCoverArtUrl(coverArtId, cacheBuster);
@@ -2005,6 +2070,8 @@ export const App = () => {
   const queueLabelRef = useRef("No queue");
   const currentTimeRef = useRef(0);
   const progressSaveRef = useRef<string>("");
+  const routeRenderMeasureRef = useRef<{ routeKey: string; startedAt: number } | null>(null);
+  const lastBootstrapSignatureRef = useRef<string | null>(null);
 
   const [view, setView] = useState<ViewName>(initialRoute.view);
   const [libraryBrowseMode, setLibraryBrowseMode] = useState<LibraryBrowseMode>("all");
@@ -2104,8 +2171,14 @@ export const App = () => {
     showSettings,
     showMobileMenu
   };
+  const currentRouteKey = buildRouteUrl(currentRoute);
 
   const syncRouteState = (nextRoute: RouteState) => {
+    const nextRouteKey = buildRouteUrl(nextRoute);
+    routeRenderMeasureRef.current = {
+      routeKey: nextRouteKey,
+      startedAt: performance.now()
+    };
     appendDebugLog("info", "Route changed", `${currentRoute.view} -> ${nextRoute.view}`);
     startTransition(() => {
       setView(nextRoute.view);
@@ -2181,7 +2254,6 @@ export const App = () => {
 
   const loadBootstrap = async () => {
     const startedAt = performance.now();
-    appendDebugLog("info", "Bootstrap request started", window.location.href);
 
     try {
       const nextBootstrap = await fetchBootstrap();
@@ -2191,11 +2263,18 @@ export const App = () => {
       };
       setBootstrap(normalizedBootstrap);
       setAuthMode(nextBootstrap.hasUsers ? "login" : "register");
-      appendDebugLog(
-        "info",
-        "Bootstrap request completed",
-        `${Math.round(performance.now() - startedAt)}ms | hasUsers=${String(nextBootstrap.hasUsers)} | currentUser=${nextBootstrap.currentUser?.email ?? "none"} | needsLibrarySetup=${String(nextBootstrap.needsLibrarySetup)}`
-      );
+      const durationMs = Math.round(performance.now() - startedAt);
+      const bootstrapSignature = `${nextBootstrap.hasUsers}:${nextBootstrap.currentUser?.email ?? "none"}:${nextBootstrap.needsLibrarySetup}:${nextBootstrap.scan.isScanning}:${nextBootstrap.jobs.scheduled.some((job) => job.isRunning)}`;
+
+      if (lastBootstrapSignatureRef.current !== bootstrapSignature || durationMs >= 250) {
+        appendDebugLog(
+          durationMs >= 250 ? "warn" : "info",
+          "Bootstrap poll completed",
+          `${durationMs}ms | hasUsers=${String(nextBootstrap.hasUsers)} | currentUser=${nextBootstrap.currentUser?.email ?? "none"} | needsLibrarySetup=${String(nextBootstrap.needsLibrarySetup)} | scanRunning=${String(nextBootstrap.scan.isScanning)}`
+        );
+      }
+
+      lastBootstrapSignatureRef.current = bootstrapSignature;
       return normalizedBootstrap;
     } catch (error) {
       appendDebugLog("error", "Bootstrap request failed", error instanceof Error ? error.message : "Unknown bootstrap error");
@@ -2623,14 +2702,8 @@ export const App = () => {
     const search = deferredQuery.trim().toLowerCase();
 
     if (!search) {
-      const albumGroups = buildAlbumGroups(data.albums, data.tracks);
-      const artistGroups = buildArtistGroups(data.artists, albumGroups);
-      const bookGroups = buildBookGroups(data.books, data.tracks);
       return {
         ...data,
-        albumGroups,
-        artistGroups,
-        bookGroups,
         playlists: data.playlists
       };
     }
@@ -2641,9 +2714,6 @@ export const App = () => {
     const albums = data.albums.filter((album) => [album.name, album.artist].some((value) => value.toLowerCase().includes(search)));
     const artists = data.artists.filter((artist) => artist.name.toLowerCase().includes(search));
     const books = data.books.filter((book) => [book.title, book.author].some((value) => value.toLowerCase().includes(search)));
-    const albumGroups = buildAlbumGroups(albums, tracks);
-    const artistGroups = buildArtistGroups(artists, albumGroups);
-    const bookGroups = buildBookGroups(books, tracks);
     const playlistTrackIds = new Set(tracks.map((track) => track.id));
     const playlists = data.playlists
       .map((playlist) => ({
@@ -2662,22 +2732,32 @@ export const App = () => {
       albums,
       artists,
       books,
-      albumGroups,
-      artistGroups,
-      bookGroups,
       playlists
     };
   }, [data, deferredQuery]);
 
-  const featuredAlbum = filteredData?.albumGroups[0] ?? null;
-  const recentAlbums = useMemo(() => filteredData?.albumGroups.slice(0, 5) ?? [], [filteredData]);
-  const savedEarlierAlbums = useMemo(() => filteredData?.albumGroups.slice(5, 10) ?? [], [filteredData]);
+  const needsGlobalAlbumGroups = view === "home" || view === "search" || view === "albums" || view === "album" || view === "artist";
+  const needsGlobalBookGroups = view === "search" || view === "books" || view === "book" || view === "authors" || view === "author";
+  const needsGlobalArtistGroups = view === "search" || view === "artists" || view === "artist";
+  const albumGroups = useMemo(
+    () => (filteredData && needsGlobalAlbumGroups ? buildAlbumGroups(filteredData.albums, filteredData.tracks) : []),
+    [filteredData, needsGlobalAlbumGroups]
+  );
+  const artistGroups = useMemo(
+    () => (filteredData && needsGlobalArtistGroups ? buildArtistGroups(filteredData.artists, albumGroups) : []),
+    [albumGroups, filteredData, needsGlobalArtistGroups]
+  );
+  const bookGroups = useMemo(
+    () => (filteredData && needsGlobalBookGroups ? buildBookGroups(filteredData.books, filteredData.tracks) : []),
+    [filteredData, needsGlobalBookGroups]
+  );
+  const featuredAlbum = albumGroups[0] ?? null;
+  const recentAlbums = useMemo(() => albumGroups.slice(0, 5), [albumGroups]);
+  const savedEarlierAlbums = useMemo(() => albumGroups.slice(5, 10), [albumGroups]);
   const trendingArtists = useMemo(() => filteredData?.artists.slice(0, 4) ?? [], [filteredData]);
-  const artistGroups = useMemo(() => filteredData?.artistGroups ?? [], [filteredData]);
-  const bookGroups = useMemo(() => filteredData?.bookGroups ?? [], [filteredData]);
-  const searchAlbums = useMemo(() => filteredData?.albumGroups.slice(0, 8) ?? [], [filteredData]);
-  const searchBooks = useMemo(() => filteredData?.bookGroups.slice(0, 8) ?? [], [filteredData]);
-  const searchArtists = useMemo(() => filteredData?.artistGroups.slice(0, 8) ?? [], [filteredData]);
+  const searchAlbums = useMemo(() => albumGroups.slice(0, 8), [albumGroups]);
+  const searchBooks = useMemo(() => bookGroups.slice(0, 8), [bookGroups]);
+  const searchArtists = useMemo(() => artistGroups.slice(0, 8), [artistGroups]);
   const searchTracks = useMemo(() => filteredData?.tracks.slice(0, 20) ?? [], [filteredData]);
   const currentTrackArtist = currentTrack?.artist ?? "Choose a track to begin playback";
   const mobileCurrentTrackArtist = truncateLabel(currentTrackArtist, 35);
@@ -2685,12 +2765,12 @@ export const App = () => {
   const mobileCurrentTrackAlbum = truncateLabel(currentTrackAlbum, 35);
   const playlists = useMemo(() => filteredData?.playlists ?? [], [filteredData]);
   const libraryItems = useMemo(() => filteredData?.tracks.slice(0, 12) ?? [], [filteredData]);
-  const activeAlbumGroup = useMemo(() => filteredData?.albumGroups.find((album) => album.id === selectedAlbumId) ?? null, [filteredData, selectedAlbumId]);
+  const activeAlbumGroup = useMemo(() => albumGroups.find((album) => album.id === selectedAlbumId) ?? null, [albumGroups, selectedAlbumId]);
   const activeAlbum = selectedAlbumDetail?.album ?? activeAlbumGroup ?? null;
   const activeAlbumTracks = selectedAlbumDetail?.tracks ?? (activeAlbumGroup ? sortTracksByPlaybackOrder(activeAlbumGroup.tracks) : []);
   const activeAlbumBlurb =
     selectedAlbumDetail?.outline || selectedAlbumDetail?.review || selectedAlbumDetail?.artistOutline || selectedAlbumDetail?.artistBiography;
-  const activeArtistGroup = useMemo(() => filteredData?.artistGroups.find((artist) => artist.id === selectedArtistId) ?? null, [filteredData, selectedArtistId]);
+  const activeArtistGroup = useMemo(() => artistGroups.find((artist) => artist.id === selectedArtistId) ?? null, [artistGroups, selectedArtistId]);
   const activeArtistTracks = activeArtistGroup ? sortTracksByPlaybackOrder(activeArtistGroup.tracks) : [];
   const activeArtistAlbums = activeArtistGroup?.albums ?? [];
   const activeArtistCoverArtId = activeArtistAlbums[0]?.coverArtId ?? activeArtistTracks[0]?.coverArtId ?? null;
@@ -2699,7 +2779,7 @@ export const App = () => {
   const activeAuthorBooks = activeAuthorGroup?.books ?? [];
   const activeAuthorTracks = activeAuthorGroup?.tracks ?? [];
   const activeAuthorCoverArtId = activeAuthorGroup ? getAuthorListCoverArtId(activeAuthorGroup, filteredData?.summary.lastScanAt ?? null) : null;
-  const activeBookGroup = useMemo(() => filteredData?.bookGroups.find((book) => book.id === selectedBookId) ?? null, [filteredData, selectedBookId]);
+  const activeBookGroup = useMemo(() => bookGroups.find((book) => book.id === selectedBookId) ?? null, [bookGroups, selectedBookId]);
   const activeBookTracks = selectedBookDetail?.tracks ?? activeBookGroup?.tracks ?? [];
   const activeBook =
     selectedBookDetail?.book || activeBookGroup
@@ -2738,8 +2818,9 @@ export const App = () => {
           : view === "book"
             ? { label: "Back to books", target: "books" as ViewName }
             : null;
+  const isLibraryView = view === "library";
   const libraryGenreSourceTracks = useMemo(() => {
-    if (!filteredData) {
+    if (!filteredData || !isLibraryView) {
       return [];
     }
 
@@ -2752,7 +2833,7 @@ export const App = () => {
     }
 
     return filteredData.tracks;
-  }, [filteredData, libraryBrowseMode]);
+  }, [filteredData, isLibraryView, libraryBrowseMode]);
   const libraryGenres = useMemo(() => {
     return [...new Set(
       libraryGenreSourceTracks
@@ -2787,7 +2868,7 @@ export const App = () => {
       .filter(Boolean)
       .includes(selectedGenreFilter);
   const libraryAllTracks = useMemo(() => {
-    if (!filteredData) {
+    if (!filteredData || !isLibraryView) {
       return [];
     }
 
@@ -2804,12 +2885,15 @@ export const App = () => {
       const matchesRecent = !libraryRecentlyAddedOnly || recentTrackIds.has(track.id);
       return matchesFilter && matchesRecent;
     });
-  }, [filteredData, libraryRecentlyAddedOnly, libraryTrackFilter]);
-  const libraryTracksFiltered = filteredData?.tracks.filter(genreMatches) ?? [];
-  const libraryMusicTracksFiltered = libraryTracksFiltered.filter((track) => track.mediaKind !== "book");
-  const libraryBookTracksFiltered = libraryTracksFiltered.filter((track) => track.mediaKind === "book");
+  }, [filteredData, isLibraryView, libraryRecentlyAddedOnly, libraryTrackFilter]);
+  const libraryTracksFiltered = useMemo(
+    () => (filteredData && isLibraryView ? filteredData.tracks.filter(genreMatches) : []),
+    [filteredData, isLibraryView, selectedGenreFilter]
+  );
+  const libraryMusicTracksFiltered = useMemo(() => libraryTracksFiltered.filter((track) => track.mediaKind !== "book"), [libraryTracksFiltered]);
+  const libraryBookTracksFiltered = useMemo(() => libraryTracksFiltered.filter((track) => track.mediaKind === "book"), [libraryTracksFiltered]);
   const libraryAlbumGroups = useMemo(() => {
-    if (!filteredData) {
+    if (!filteredData || !isLibraryView) {
       return [];
     }
 
@@ -2818,9 +2902,9 @@ export const App = () => {
       filteredData.albums.filter((album) => albumIds.has(album.id)),
       libraryMusicTracksFiltered
     ).filter((album) => album.tracks.length > 0);
-  }, [filteredData, libraryMusicTracksFiltered]);
+  }, [filteredData, isLibraryView, libraryMusicTracksFiltered]);
   const libraryArtistGroups = useMemo(() => {
-    if (!filteredData) {
+    if (!filteredData || !isLibraryView) {
       return [];
     }
 
@@ -2829,9 +2913,9 @@ export const App = () => {
       filteredData.artists.filter((artist) => artistIds.has(artist.id)),
       libraryAlbumGroups
     ).filter((artist) => artist.tracks.length > 0);
-  }, [filteredData, libraryAlbumGroups, libraryMusicTracksFiltered]);
+  }, [filteredData, isLibraryView, libraryAlbumGroups, libraryMusicTracksFiltered]);
   const libraryBookGroups = useMemo(() => {
-    if (!filteredData) {
+    if (!filteredData || !isLibraryView) {
       return [];
     }
 
@@ -2840,7 +2924,7 @@ export const App = () => {
       filteredData.books.filter((book) => bookIds.has(book.id)),
       libraryBookTracksFiltered
     ).filter((book) => book.tracks.length > 0);
-  }, [filteredData, libraryBookTracksFiltered]);
+  }, [filteredData, isLibraryView, libraryBookTracksFiltered]);
   const sortAuthorGroups = (authors: AuthorWithBooks[]) => {
     if (libraryAuthorsSort === "book-count") {
       return [...authors].sort((left, right) => {
@@ -2857,9 +2941,13 @@ export const App = () => {
     return [...authors].sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
   };
   const sortedAuthorGroups = useMemo(() => sortAuthorGroups(authorGroups), [authorGroups, libraryAuthorsSort]);
-  const libraryAuthorGroupsBase = useMemo(() => buildAuthorGroups(libraryBookGroups), [libraryBookGroups]);
-  const filteredLibraryAuthorGroups = useMemo(() => sortAuthorGroups(libraryAuthorGroupsBase), [libraryAuthorGroupsBase, libraryAuthorsSort]);
+  const libraryAuthorGroupsBase = useMemo(() => (isLibraryView ? buildAuthorGroups(libraryBookGroups) : []), [isLibraryView, libraryBookGroups]);
+  const filteredLibraryAuthorGroups = useMemo(() => (isLibraryView ? sortAuthorGroups(libraryAuthorGroupsBase) : []), [isLibraryView, libraryAuthorGroupsBase, libraryAuthorsSort]);
   const filteredLibraryBookGroups = useMemo(() => {
+    if (!isLibraryView) {
+      return [];
+    }
+
     const visibleBooks = libraryBookGroups.filter((book) => {
       const status = getBookCardStatus(book);
       const isCached = isBookCardCached(book);
@@ -2961,7 +3049,7 @@ export const App = () => {
     }
 
     return visibleBooks;
-  }, [libraryBookGroups, libraryBooksSort, showCachedBooks, showCompletedBooks, showInProgressBooks]);
+  }, [isLibraryView, libraryBookGroups, libraryBooksSort, showCachedBooks, showCompletedBooks, showInProgressBooks]);
   const libraryRecentAlbumGroups = useMemo(() => [...libraryAlbumGroups].sort((left, right) => {
     const leftModifiedAt = left.tracks[0]?.modifiedAt ?? "";
     const rightModifiedAt = right.tracks[0]?.modifiedAt ?? "";
@@ -4159,6 +4247,31 @@ export const App = () => {
   const showEntityMetadataOnHeroImage = bootstrap?.settings.showEntityMetadataOnHeroImage ?? false;
   const contentReady = view === "settings" ? !!bootstrap : !!filteredData;
 
+  useEffect(() => {
+    if (loading || libraryLoading || !contentReady) {
+      return;
+    }
+
+    const pendingMeasure = routeRenderMeasureRef.current;
+
+    if (!pendingMeasure || pendingMeasure.routeKey !== currentRouteKey) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      const completedMeasure = routeRenderMeasureRef.current;
+
+      if (!completedMeasure || completedMeasure.routeKey !== currentRouteKey) {
+        return;
+      }
+
+      appendDebugLog("info", "Route render completed", `${currentRouteKey} | ${Math.round(performance.now() - completedMeasure.startedAt)}ms`);
+      routeRenderMeasureRef.current = null;
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [contentReady, currentRouteKey, libraryLoading, loading]);
+
   return (
     <div className="app-shell">
       {shouldShowBlockingSetup ? (
@@ -4813,9 +4926,14 @@ export const App = () => {
                         <span>{libraryAlbumGroups.length} visible</span>
                       )}
                     </div>
-                    <div className="album-grid">
-                      {(libraryBrowseMode === "all" ? libraryRecentAlbumPreview : libraryAlbumGroups).map((album) => (
-                        <button key={album.id} className="album-card wide" onClick={() => openAlbum(album.id)}>
+                    <IncrementalGrid
+                      items={libraryBrowseMode === "all" ? libraryRecentAlbumPreview : libraryAlbumGroups}
+                      className="album-grid"
+                      batchSize={16}
+                      initialBatchSize={libraryBrowseMode === "all" ? 8 : 16}
+                      itemKey={(album) => album.id}
+                      renderItem={(album) => (
+                        <button className="album-card wide" onClick={() => openAlbum(album.id)}>
                           <div className={showEntityMetadataOnHeroImage ? "entity-list-art" : undefined}>
                             <AlbumArt coverArtId={album.coverArtId} alt={album.name} />
                             {showEntityMetadataOnHeroImage ? (
@@ -4833,8 +4951,8 @@ export const App = () => {
                             </>
                           )}
                         </button>
-                      ))}
-                    </div>
+                      )}
+                    />
                   </section>
                 ) : null}
 
@@ -4892,10 +5010,14 @@ export const App = () => {
                       <h2>Artists</h2>
                       <span>{libraryArtistGroups.length} artists</span>
                     </div>
-                    <div className="artist-page-grid">
-                      {libraryArtistGroups.map((artist) => (
+                    <IncrementalGrid
+                      items={libraryArtistGroups}
+                      className="artist-page-grid"
+                      batchSize={18}
+                      initialBatchSize={18}
+                      itemKey={(artist) => `${artist.id}:${artist.name}`}
+                      renderItem={(artist) => (
                         <button
-                          key={`${artist.id}:${artist.name}`}
                           className={showEntityMetadataOnHeroImage ? "artist-spotlight-card overlay-enabled" : "artist-spotlight-card"}
                           onClick={() => openArtist(artist.id)}
                         >
@@ -4913,8 +5035,8 @@ export const App = () => {
                           {showEntityMetadataOnHeroImage ? null : <span>{artist.albums.length} albums</span>}
                           {showEntityMetadataOnHeroImage ? null : <span>{artist.tracks.length} tracks · {formatDuration(artist.durationSeconds)}</span>}
                         </button>
-                      ))}
-                    </div>
+                      )}
+                    />
                   </section>
                 ) : null}
 
@@ -5012,14 +5134,19 @@ export const App = () => {
                         </div>
                       </div>
                     </div>
-                    <div className="album-grid">
-                      {filteredLibraryBookGroups.map((book) => {
+                    <IncrementalGrid
+                      items={filteredLibraryBookGroups}
+                      className="album-grid"
+                      batchSize={18}
+                      initialBatchSize={18}
+                      itemKey={(book) => book.id}
+                      renderItem={(book) => {
                         const isCompleted = isBookCompleted(getBookCardProgress(book), book.tracks);
                         const isInProgress = isBookInProgress(getBookCardProgress(book), book.tracks);
                         const resumeLabel = isCompleted ? null : getBookCardResumeLabel(book);
 
                         return (
-                          <button key={book.id} className="album-card wide" onClick={() => openBook(book.id)}>
+                          <button className="album-card wide" onClick={() => openBook(book.id)}>
                             <div className={showEntityMetadataOnHeroImage ? "entity-list-art" : "entity-list-art entity-list-art-plain"}>
                               <AlbumArt coverArtId={book.coverArtId} alt={book.title} />
                               {isCompleted ? (
@@ -5032,14 +5159,14 @@ export const App = () => {
                                   <span>In progress</span>
                                 </span>
                               ) : null}
-                          {showEntityMetadataOnHeroImage ? (
-                            <EntityListImageOverlay
-                              title={book.title}
-                              primaryLine={book.author}
-                              secondaryLine={`${book.trackCount} chapters · ${formatDuration(book.durationSeconds)}`}
-                              tertiaryLine={resumeLabel ? `Resume: ${resumeLabel}` : null}
-                            />
-                          ) : null}
+                              {showEntityMetadataOnHeroImage ? (
+                                <EntityListImageOverlay
+                                  title={book.title}
+                                  primaryLine={book.author}
+                                  secondaryLine={`${book.trackCount} chapters · ${formatDuration(book.durationSeconds)}`}
+                                  tertiaryLine={resumeLabel ? `Resume: ${resumeLabel}` : null}
+                                />
+                              ) : null}
                             </div>
                             {showEntityMetadataOnHeroImage ? null : (
                               <>
@@ -5050,8 +5177,8 @@ export const App = () => {
                             )}
                           </button>
                         );
-                      })}
-                    </div>
+                      }}
+                    />
                   </section>
                 ) : null}
 
@@ -5108,32 +5235,36 @@ export const App = () => {
                         </div>
                       </div>
                     </div>
-                    <div className="artist-page-grid">
-                      {filteredLibraryAuthorGroups.map((author) => (
-                        <button
-                          key={`${author.id}:${author.name}`}
-                          className={showEntityMetadataOnHeroImage ? "artist-spotlight-card overlay-enabled" : "artist-spotlight-card"}
-                          onClick={() => openAuthor(author.id)}
-                        >
-                          <div className={showEntityMetadataOnHeroImage ? "artist-spotlight-art entity-list-art" : "artist-spotlight-art entity-list-art entity-list-art-plain"}>
-                            <ArtistArt
-                              artist={author.name}
-                              coverArtId={getAuthorListCoverArtId(author, filteredData?.summary.lastScanAt ?? null)}
+                  <IncrementalGrid
+                    items={filteredLibraryAuthorGroups}
+                    className="artist-page-grid"
+                    batchSize={18}
+                    initialBatchSize={18}
+                    itemKey={(author) => `${author.id}:${author.name}`}
+                    renderItem={(author) => (
+                      <button
+                        className={showEntityMetadataOnHeroImage ? "artist-spotlight-card overlay-enabled" : "artist-spotlight-card"}
+                        onClick={() => openAuthor(author.id)}
+                      >
+                        <div className={showEntityMetadataOnHeroImage ? "artist-spotlight-art entity-list-art" : "artist-spotlight-art entity-list-art entity-list-art-plain"}>
+                          <ArtistArt
+                            artist={author.name}
+                            coverArtId={getAuthorListCoverArtId(author, filteredData?.summary.lastScanAt ?? null)}
+                          />
+                          {showEntityMetadataOnHeroImage ? (
+                            <EntityListImageOverlay
+                              title={author.name}
+                              secondaryLine={`${author.books.length} books`}
+                              tertiaryLine={`${author.tracks.length} chapters · ${formatDuration(author.durationSeconds)}`}
                             />
-                            {showEntityMetadataOnHeroImage ? (
-                              <EntityListImageOverlay
-                                title={author.name}
-                                secondaryLine={`${author.books.length} books`}
-                                tertiaryLine={`${author.tracks.length} chapters · ${formatDuration(author.durationSeconds)}`}
-                              />
-                            ) : null}
-                          </div>
-                          {showEntityMetadataOnHeroImage ? null : <strong>{author.name}</strong>}
-                          {showEntityMetadataOnHeroImage ? null : <span>{author.books.length} books</span>}
-                          {showEntityMetadataOnHeroImage ? null : <span>{author.tracks.length} chapters · {formatDuration(author.durationSeconds)}</span>}
-                        </button>
-                      ))}
-                    </div>
+                          ) : null}
+                        </div>
+                        {showEntityMetadataOnHeroImage ? null : <strong>{author.name}</strong>}
+                        {showEntityMetadataOnHeroImage ? null : <span>{author.books.length} books</span>}
+                        {showEntityMetadataOnHeroImage ? null : <span>{author.tracks.length} chapters · {formatDuration(author.durationSeconds)}</span>}
+                      </button>
+                    )}
+                  />
                   </section>
                 ) : null}
 
@@ -5900,10 +6031,14 @@ export const App = () => {
                       </div>
                     </div>
                   </div>
-                  <div className="artist-page-grid">
-                    {sortedAuthorGroups.map((author) => (
+                  <IncrementalGrid
+                    items={sortedAuthorGroups}
+                    className="artist-page-grid"
+                    batchSize={18}
+                    initialBatchSize={18}
+                    itemKey={(author) => `${author.id}:${author.name}`}
+                    renderItem={(author) => (
                       <button
-                        key={`${author.id}:${author.name}`}
                         className={showEntityMetadataOnHeroImage ? "artist-spotlight-card overlay-enabled" : "artist-spotlight-card"}
                         onClick={() => openAuthor(author.id)}
                       >
@@ -5924,8 +6059,8 @@ export const App = () => {
                         {showEntityMetadataOnHeroImage ? null : <span>{author.books.length} books</span>}
                         {showEntityMetadataOnHeroImage ? null : <span>{author.tracks.length} chapters · {formatDuration(author.durationSeconds)}</span>}
                       </button>
-                    ))}
-                  </div>
+                    )}
+                  />
                 </section>
               </>
             ) : null}
@@ -5944,14 +6079,19 @@ export const App = () => {
                     <h2>Book Shelf</h2>
                     <span>Resume where you left off or start from the beginning</span>
                   </div>
-                  <div className="album-grid">
-                    {bookGroups.map((book) => {
+                  <IncrementalGrid
+                    items={bookGroups}
+                    className="album-grid"
+                    batchSize={18}
+                    initialBatchSize={18}
+                    itemKey={(book) => book.id}
+                    renderItem={(book) => {
                       const isCompleted = isBookCompleted(getBookCardProgress(book), book.tracks);
                       const isInProgress = isBookInProgress(getBookCardProgress(book), book.tracks);
                       const resumeLabel = isCompleted ? null : getBookCardResumeLabel(book);
 
                       return (
-                        <button key={book.id} className="album-card wide" onClick={() => openBook(book.id)}>
+                        <button className="album-card wide" onClick={() => openBook(book.id)}>
                           <div className={showEntityMetadataOnHeroImage ? "entity-list-art" : "entity-list-art entity-list-art-plain"}>
                             <AlbumArt coverArtId={book.coverArtId} alt={book.title} />
                             {isCompleted ? (
@@ -5982,8 +6122,8 @@ export const App = () => {
                           )}
                         </button>
                       );
-                    })}
-                  </div>
+                    }}
+                  />
                 </section>
               </>
             ) : null}

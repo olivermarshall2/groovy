@@ -1014,6 +1014,12 @@ button {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+.incremental-grid-sentinel {
+  grid-column: 1 / -1;
+  height: 1px;
+  pointer-events: none;
+}
+
 .album-card {
   background: transparent;
   color: inherit;
