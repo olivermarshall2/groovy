@@ -96,10 +96,12 @@ export const buildServer = async () => {
 
   server.addHook("onReady", async () => {
     await context.scanner.start();
+    await context.mobileCoverJobs.start();
   });
 
   server.addHook("onClose", async () => {
     await context.scanner.stop();
+    await context.mobileCoverJobs.stop();
     context.repository.close();
   });
 

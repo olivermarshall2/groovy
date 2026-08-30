@@ -2,7 +2,7 @@
 
 All notable project changes should be recorded here. Keep the newest entry at the top.
 
-## Unreleased
+## 0.21.0 - 2026-08-30
 
 ### Changed
 
@@ -10,6 +10,9 @@ All notable project changes should be recorded here. Keep the newest entry at th
 - Added scanner timeouts and error handling around slow directory, file stat, metadata, and cover-art reads so problematic network entries do not stall the whole scan.
 - Improved scan progress accounting by counting audio files per discovered folder before metadata reads begin.
 - Updated audiobook metadata handling so book authors are derived from the Artist tag while Album Artist remains available for narrator-oriented client display.
+- Added nightly mobile cover-art optimization for Android-friendly remote and offline artwork.
+- Improved Android library refresh behavior so suspicious empty responses from large-folder syncs do not wipe the cached library.
+- Added Android fallbacks that derive audiobook collections from track data when the books endpoint is temporarily empty.
 
 ## 0.17.0 - 2026-08-29
 

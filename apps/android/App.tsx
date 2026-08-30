@@ -374,6 +374,92 @@ const mergeBooksWithLocalProgress = (
     };
   });
 
+const deriveBooksFromTracks = (tracks: TrackRecord[]) => {
+  const byBook = new Map<string, BookRecord>();
+
+  for (const track of tracks) {
+    if (track.mediaKind !== "book" || !track.bookId) {
+      continue;
+    }
+
+    const existing = byBook.get(track.bookId);
+    if (existing) {
+      existing.trackCount += 1;
+      existing.durationSeconds += Math.max(0, track.durationSeconds ?? 0);
+      if (!existing.coverArtId && track.coverArtId) {
+        existing.coverArtId = track.coverArtId;
+      }
+      continue;
+    }
+
+    byBook.set(track.bookId, {
+      id: track.bookId,
+      title: track.bookTitle ?? track.album ?? track.title ?? "Unknown Book",
+      author: getBookTrackAuthor(track) ?? "Unknown Author",
+      trackCount: 1,
+      durationSeconds: Math.max(0, track.durationSeconds ?? 0),
+      coverArtId: track.coverArtId ?? null,
+      lastListenedAt: null,
+      lastTrackId: null,
+      lastPositionSeconds: null
+    });
+  }
+
+  return [...byBook.values()].sort((left, right) => left.title.localeCompare(right.title, undefined, { sensitivity: "base" }));
+};
+
+const isSuspiciousEmptyLibraryResponse = (params: {
+  nextAlbums: AlbumRecord[] | null;
+  nextBooks: BookRecord[] | null;
+  nextPlaylists: PlaylistRecord[] | null;
+  nextTracks: TrackRecord[] | null;
+  currentAlbumsCount: number;
+  currentBooksCount: number;
+  currentPlaylistsCount: number;
+  currentTracksCount: number;
+  offlineBundleCount: number;
+}) => {
+  const {
+    nextAlbums,
+    nextBooks,
+    nextPlaylists,
+    nextTracks,
+    currentAlbumsCount,
+    currentBooksCount,
+    currentPlaylistsCount,
+    currentTracksCount,
+    offlineBundleCount
+  } = params;
+
+  if (!nextAlbums || !nextBooks || !nextPlaylists || !nextTracks) {
+    return false;
+  }
+
+  const nextLibraryLooksEmpty = nextAlbums.length === 0 && nextBooks.length === 0 && nextTracks.length === 0;
+  const currentLibraryHasContent =
+    currentAlbumsCount > 0 || currentBooksCount > 0 || currentPlaylistsCount > 1 || currentTracksCount > 0 || offlineBundleCount > 0;
+
+  return nextLibraryLooksEmpty && currentLibraryHasContent;
+};
+
+const shouldPreserveExistingBooks = (params: {
+  resolvedBooks: BookRecord[] | null;
+  nextAlbums: AlbumRecord[] | null;
+  nextTracks: TrackRecord[] | null;
+  currentBooksCount: number;
+}) => {
+  const { resolvedBooks, nextAlbums, nextTracks, currentBooksCount } = params;
+
+  if (!resolvedBooks || currentBooksCount === 0) {
+    return false;
+  }
+
+  const booksDroppedOut = resolvedBooks.length === 0;
+  const otherLibraryDataStillPresent = (nextAlbums?.length ?? 0) > 0 || (nextTracks?.length ?? 0) > 0;
+
+  return booksDroppedOut && otherLibraryDataStillPresent;
+};
+
 const isBookCompleted = (
   progress: { trackId: string; positionSeconds: number } | null | undefined,
   tracks: TrackRecord[] | null | undefined
@@ -1098,8 +1184,16 @@ const AppBody = () => {
     [offlineLibrary.bundles]
   );
 
+  const derivedTrackBooks = useMemo<BookRecord[]>(() => {
+    if (books.length > 0) {
+      return [];
+    }
+
+    return deriveBooksFromTracks(tracks);
+  }, [books.length, tracks]);
+
   const visibleAlbums = albums.length > 0 ? albums : offlineAlbums;
-  const visibleBooks = books.length > 0 ? books : offlineBooks;
+  const visibleBooks = books.length > 0 ? books : derivedTrackBooks.length > 0 ? derivedTrackBooks : offlineBooks;
 
   const filteredAlbums = useMemo(() => {
     const query = searchText.trim().toLowerCase();
@@ -1358,7 +1452,7 @@ const AppBody = () => {
   );
 
   const getTrackArtworkRemoteUri = (track: TrackRecord | null) =>
-    track?.coverArtId && serverUrl ? getAbsoluteUrl(serverUrl, `/api/library/cover-art/${encodeURIComponent(track.coverArtId)}`) : null;
+    track?.coverArtId && serverUrl ? getAbsoluteUrl(serverUrl, `/api/library/cover-art/${encodeURIComponent(track.coverArtId)}?variant=mobile`) : null;
 
   const buildLockScreenMetadata = (track: TrackRecord, artworkUrl?: string | null) => ({
     title: track.title ?? "Untitled track",
@@ -2042,6 +2136,25 @@ const AppBody = () => {
       const nextPlaylists = endpointResults.find((result) => result.endpoint === "playlists" && result.ok)?.value ?? null;
       const nextTracks = endpointResults.find((result) => result.endpoint === "tracks" && result.ok)?.value ?? null;
       const likes = endpointResults.find((result) => result.endpoint === "likes" && result.ok)?.value ?? null;
+      const derivedBooksFromServerTracks = nextBooks && nextBooks.length === 0 && nextTracks ? deriveBooksFromTracks(nextTracks) : [];
+      const resolvedBooks = nextBooks && nextBooks.length === 0 && derivedBooksFromServerTracks.length > 0 ? derivedBooksFromServerTracks : nextBooks;
+      const preserveExistingBooks = shouldPreserveExistingBooks({
+        resolvedBooks,
+        nextAlbums,
+        nextTracks,
+        currentBooksCount: books.length
+      });
+      const suspiciousEmptyLibraryResponse = isSuspiciousEmptyLibraryResponse({
+        nextAlbums,
+        nextBooks: resolvedBooks,
+        nextPlaylists,
+        nextTracks,
+        currentAlbumsCount: albums.length,
+        currentBooksCount: books.length,
+        currentPlaylistsCount: playlists.length,
+        currentTracksCount: tracks.length,
+        offlineBundleCount: Object.keys(offlineLibraryRef.current.bundles).length
+      });
 
       if (bootstrap) {
         await logInfo("Server discovery: bootstrap endpoint responded", {
@@ -2051,20 +2164,56 @@ const AppBody = () => {
         setBootstrapRequiresRegister(!bootstrap.hasUsers);
       }
 
+      if (nextBooks && nextBooks.length === 0 && derivedBooksFromServerTracks.length > 0) {
+        await logInfo("Books endpoint returned empty; derived books from track payload", {
+          serverUrl,
+          derivedBookCount: derivedBooksFromServerTracks.length,
+          trackCount: nextTracks?.length ?? 0
+        });
+      }
+
+      if (preserveExistingBooks) {
+        await logInfo("Books endpoint returned empty; preserving existing books collection", {
+          serverUrl,
+          currentBooksCount: books.length,
+          albumCount: nextAlbums?.length ?? 0,
+          trackCount: nextTracks?.length ?? 0
+        });
+      }
+
+      if (suspiciousEmptyLibraryResponse) {
+        await logInfo("Server discovery: suspicious empty library response ignored", {
+          serverUrl,
+          currentAlbumsCount: albums.length,
+          currentBooksCount: books.length,
+          currentPlaylistsCount: playlists.length,
+          currentTracksCount: tracks.length,
+          nextAlbumsCount: nextAlbums?.length ?? null,
+          nextBooksCount: nextBooks?.length ?? null,
+          nextPlaylistsCount: nextPlaylists?.length ?? null,
+          nextTracksCount: nextTracks?.length ?? null,
+          offlineBundleCount: Object.keys(offlineLibraryRef.current.bundles).length
+        });
+
+        if (options?.notifyOnFailure) {
+          showStatusNotice("Server responded with an empty library snapshot. Keeping your cached library.");
+        }
+      }
+
       if (summary || nextAlbums || nextBooks || nextPlaylists || nextTracks || likes) {
         setCoverArtRefreshKey(new Date().toISOString());
       }
 
-      if (nextAlbums) {
+      if (nextAlbums && !suspiciousEmptyLibraryResponse) {
         setAlbums(nextAlbums);
       }
-      if (nextBooks) {
-        setBooks(mergeBooksWithLocalProgress(nextBooks, persistedBookProgress));
+      if (resolvedBooks && !suspiciousEmptyLibraryResponse && !preserveExistingBooks) {
+        setBooks(mergeBooksWithLocalProgress(resolvedBooks, persistedBookProgress));
       }
-      if (nextPlaylists) {
+      if (nextPlaylists && !suspiciousEmptyLibraryResponse) {
         setPlaylists(nextPlaylists);
       }
-      if (nextTracks) {
+      if (nextTracks && !suspiciousEmptyLibraryResponse) {
         setTracks(nextTracks);
       }
       if (likes) {
@@ -2074,8 +2223,8 @@ const AppBody = () => {
         setSummaryText(summary.lastScanAt ? `${summary.trackCount} tracks indexed` : "Scan your library to begin");
       }
 
-      if (summary && nextAlbums && nextBooks && nextPlaylists && nextTracks && likes) {
-        const mergedBooks = mergeBooksWithLocalProgress(nextBooks, persistedBookProgress);
+      if (summary && nextAlbums && resolvedBooks && nextPlaylists && nextTracks && likes && !suspiciousEmptyLibraryResponse && !preserveExistingBooks) {
+        const mergedBooks = mergeBooksWithLocalProgress(resolvedBooks, persistedBookProgress);
         const nextLibraryCache = {
           albums: nextAlbums,
           books: mergedBooks,
@@ -2091,8 +2240,8 @@ const AppBody = () => {
         await syncNativeMediaBrowserLibraryCache(nextLibraryCache);
       }
 
-      if (nextBooks) {
-        void reconcileBookProgressWithServer(nextBooks, persistedBookProgress, "refreshLibrary");
+      if (resolvedBooks && !preserveExistingBooks) {
+        void reconcileBookProgressWithServer(resolvedBooks, persistedBookProgress, "refreshLibrary");
       }
 
       if (Object.keys(offlineLibraryRef.current.bundles).length > 0) {
@@ -2136,9 +2285,12 @@ const AppBody = () => {
         failedEndpointKinds: failures.map((result) =>
           isApiAuthError(result.error) ? "auth" : isApiNetworkError(result.error) ? "network" : "other"
         ),
+        suspiciousEmptyLibraryResponse,
+        preserveExistingBooks,
         persistedBookProgressCount: Object.keys(persistedBookProgress).length,
         albumCount: nextAlbums?.length ?? null,
-        bookCount: nextBooks?.length ?? null,
+        bookCount: resolvedBooks?.length ?? null,
+        derivedBookCount: derivedBooksFromServerTracks.length,
         playlistCount: nextPlaylists?.length ?? null,
         trackCount: nextTracks?.length ?? null,
         likedTrackCount: likes?.trackIds.length ?? null
@@ -2554,7 +2706,7 @@ const AppBody = () => {
       };
     }
 
-    void refreshLibrary({ showBusy: false, notifyOnFailure: true });
+    void refreshLibrary({ showBusy: false, notifyOnFailure: false });
   }, [normalizedServerUrl, token]);
 
   useEffect(() => {
@@ -4213,6 +4365,15 @@ const AppBody = () => {
         offlineUri: offlineLibrary.bundles[`album:${album.id}`]?.coverUri ?? null,
         onPress: () => void openAlbum(album.id)
       }), "albumCardItems");
+  const artistCardItems = safeMap(filteredArtists, (artist) => ({
+        key: artist.id,
+        title: artist.name,
+        subtitle: `${artist.albumCount} albums · ${artist.totalTracks} tracks`,
+        accent: "Artist",
+        remoteUri: getCoverRemoteUri(artist.coverArtId),
+        offlineUri: artist.coverUri,
+        onPress: () => openArtist(artist.id)
+      }), "artistCardItems");
   const recentBooks = visibleBooks.slice(0, 4);
   const recentArtists = filteredArtists.slice(0, 4);
   const recentPlaylists = fallbackVisiblePlaylists.slice(0, 4);
@@ -4222,6 +4383,7 @@ const AppBody = () => {
   const mobilePlayerHeight = currentTrack ? (mobilePlayerExpanded ? 252 + expandedQueueHeight : 60) : 0;
   const mobileDockHeight = mobileNavHeight + mobilePlayerHeight + 12;
   const showVirtualizedAlbumBrowser = !busy && view === "library" && libraryMode === "albums" && (!currentItem || currentItem.type !== "album");
+  const showVirtualizedArtistBrowser = !busy && view === "library" && libraryMode === "artists" && (!currentItem || currentItem.type !== "artist");
   const albumGridColumns = isTablet ? 3 : 2;
   const syncedBundles = safeMap(Object.entries(offlineLibrary.bundles), ([key, bundle]) => ({ key, bundle }), "syncedBundles")
     .sort((left, right) => right.bundle.syncedAt.localeCompare(left.bundle.syncedAt));
@@ -4296,8 +4458,10 @@ const AppBody = () => {
       return null;
     }
 
-    const coverUrl = getAbsoluteUrl(serverUrl, `/api/library/cover-art/${encodeURIComponent(coverArtId)}`);
-    return `${coverUrl}?rev=${encodeURIComponent(coverArtRefreshKey)}`;
+    return getAbsoluteUrl(
+      serverUrl,
+      `/api/library/cover-art/${encodeURIComponent(coverArtId)}?variant=mobile&rev=${encodeURIComponent(coverArtRefreshKey)}`
+    );
   }
   const artistHeaderAlbum = artistAlbums[0] ?? null;
   const artistHeaderBook = artistBooks[0] ?? null;
@@ -4943,6 +5107,68 @@ const AppBody = () => {
                 </View>
               }
               ListEmptyComponent={<Text style={styles.emptyStateText}>No albums are available yet.</Text>}
+              renderItem={({ item }) => (
+                <View style={[styles.albumGridCell, albumGridColumns === 3 && styles.albumGridCellTablet]}>
+                  <LibraryCard item={item} token={token} />
+                </View>
+              )}
+              removeClippedSubviews
+              initialNumToRender={12}
+              maxToRenderPerBatch={8}
+              windowSize={7}
+              updateCellsBatchingPeriod={16}
+            />
+          ) : showVirtualizedArtistBrowser ? (
+            <FlatList
+              data={artistCardItems}
+              key={`artist-grid-${albumGridColumns}`}
+              keyExtractor={(item) => item.key}
+              numColumns={albumGridColumns}
+              columnWrapperStyle={albumGridColumns > 1 ? styles.albumListRow : undefined}
+              contentContainerStyle={[
+                styles.scrollContent,
+                styles.albumListContent,
+                isPhone && { paddingBottom: mobileDockHeight + 18 }
+              ]}
+              refreshControl={
+                token && serverUrl ? (
+                  <RefreshControl
+                    refreshing={refreshing}
+                    onRefresh={() => {
+                      void handlePullToRefresh();
+                    }}
+                    tintColor={theme.accent}
+                    colors={[theme.accent]}
+                    progressBackgroundColor={theme.panel}
+                  />
+                ) : undefined
+              }
+              ListHeaderComponent={
+                <View style={styles.albumListHeader}>
+                  {statusNotice ? (
+                    <View style={styles.statusNotice}>
+                      <CircleAlert color={theme.accent} size={16} strokeWidth={2.2} />
+                      <Text style={styles.statusNoticeText}>{statusNotice}</Text>
+                    </View>
+                  ) : null}
+                  <View style={styles.topbar}>
+                    <Text style={styles.pageTitle}>Artists</Text>
+                  </View>
+                  {featuredArtist ? (
+                    <FeaturedEntityHero
+                      eyebrow="Featured Artist"
+                      title={featuredArtist.name}
+                      subtitle={`${featuredArtist.albumCount} albums · ${featuredArtist.totalTracks} tracks`}
+                      remoteUri={getCoverRemoteUri(featuredArtist.coverArtId)}
+                      offlineUri={featuredArtist.coverUri}
+                      token={token}
+                      primaryLabel="Open Artist"
+                      onPrimaryPress={() => openArtist(featuredArtist.id)}
+                    />
+                  ) : null}
+                </View>
+              }
+              ListEmptyComponent={<Text style={styles.emptyStateText}>No artists are available yet.</Text>}
               renderItem={({ item }) => (
                 <View style={[styles.albumGridCell, albumGridColumns === 3 && styles.albumGridCellTablet]}>
                   <LibraryCard item={item} token={token} />
@@ -6356,7 +6582,7 @@ const AppBody = () => {
               <View style={styles.playerArt}>
                 {currentTrack ? (
                   <AlbumArt
-                    remoteUri={currentTrack.coverArtId ? getAbsoluteUrl(serverUrl, `/api/library/cover-art/${encodeURIComponent(currentTrack.coverArtId)}`) : null}
+                    remoteUri={getCoverRemoteUri(currentTrack.coverArtId)}
                     offlineUri={getOfflineCoverUri(offlineLibrary, currentTrack.id, currentTrack.coverArtId)}
                     token={token}
                   />

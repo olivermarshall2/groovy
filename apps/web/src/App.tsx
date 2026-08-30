@@ -205,7 +205,9 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   scanIntervalMinutes: 15,
   queueAlbumTracksOnPlay: true,
   promptBeforeReplacingQueueOnPlay: true,
-  showEntityMetadataOnHeroImage: false
+  showEntityMetadataOnHeroImage: false,
+  mobileOptimizedCoversEnabled: true,
+  mobileOptimizedCoverJobTime: "03:00"
 };
 
 const normalizeAppSettings = (settings: Partial<AppSettings> | null | undefined): AppSettings => ({
@@ -214,7 +216,9 @@ const normalizeAppSettings = (settings: Partial<AppSettings> | null | undefined)
   scanIntervalMinutes: settings?.scanIntervalMinutes ?? DEFAULT_APP_SETTINGS.scanIntervalMinutes,
   queueAlbumTracksOnPlay: settings?.queueAlbumTracksOnPlay ?? DEFAULT_APP_SETTINGS.queueAlbumTracksOnPlay,
   promptBeforeReplacingQueueOnPlay: settings?.promptBeforeReplacingQueueOnPlay ?? DEFAULT_APP_SETTINGS.promptBeforeReplacingQueueOnPlay,
-  showEntityMetadataOnHeroImage: settings?.showEntityMetadataOnHeroImage ?? DEFAULT_APP_SETTINGS.showEntityMetadataOnHeroImage
+  showEntityMetadataOnHeroImage: settings?.showEntityMetadataOnHeroImage ?? DEFAULT_APP_SETTINGS.showEntityMetadataOnHeroImage,
+  mobileOptimizedCoversEnabled: settings?.mobileOptimizedCoversEnabled ?? DEFAULT_APP_SETTINGS.mobileOptimizedCoversEnabled,
+  mobileOptimizedCoverJobTime: settings?.mobileOptimizedCoverJobTime ?? DEFAULT_APP_SETTINGS.mobileOptimizedCoverJobTime
 });
 
 const navItems: Array<{ id: ViewName; label: string; icon: LucideIcon }> = [
@@ -1294,10 +1298,14 @@ const SettingsForm = ({
   const initialLibraryRoot = initialSettings.libraryRoots[0] ?? "";
   const initialBookRoot = initialSettings.bookRoots[0] ?? "";
   const initialScanInterval = String(initialSettings.scanIntervalMinutes);
+  const initialMobileOptimizedCoversEnabled = initialSettings.mobileOptimizedCoversEnabled;
+  const initialMobileOptimizedCoverJobTime = initialSettings.mobileOptimizedCoverJobTime;
 
   const [rootPath, setRootPath] = useState(initialLibraryRoot);
   const [bookRootPath, setBookRootPath] = useState(initialBookRoot);
   const [scanIntervalMinutes, setScanIntervalMinutes] = useState(String(initialSettings.scanIntervalMinutes));
+  const [mobileOptimizedCoversEnabled, setMobileOptimizedCoversEnabled] = useState(initialMobileOptimizedCoversEnabled);
+  const [mobileOptimizedCoverJobTime, setMobileOptimizedCoverJobTime] = useState(initialMobileOptimizedCoverJobTime);
   const [showScanDetails, setShowScanDetails] = useState(false);
   const [scanElapsedMs, setScanElapsedMs] = useState(0);
   const [scanTarget, setScanTarget] = useState<"music" | "books" | null>(null);
@@ -1306,7 +1314,9 @@ const SettingsForm = ({
     setRootPath(initialLibraryRoot);
     setBookRootPath(initialBookRoot);
     setScanIntervalMinutes(initialScanInterval);
-  }, [initialBookRoot, initialLibraryRoot, initialScanInterval]);
+    setMobileOptimizedCoversEnabled(initialMobileOptimizedCoversEnabled);
+    setMobileOptimizedCoverJobTime(initialMobileOptimizedCoverJobTime);
+  }, [initialBookRoot, initialLibraryRoot, initialMobileOptimizedCoverJobTime, initialMobileOptimizedCoversEnabled, initialScanInterval]);
 
   useEffect(() => {
     if (!scanBusy) {
@@ -1335,7 +1345,9 @@ const SettingsForm = ({
   const hasUnsavedChanges =
     rootPath.trim() !== initialLibraryRoot ||
     bookRootPath.trim() !== initialBookRoot ||
-    scanIntervalMinutes !== initialScanInterval;
+    scanIntervalMinutes !== initialScanInterval ||
+    mobileOptimizedCoversEnabled !== initialMobileOptimizedCoversEnabled ||
+    mobileOptimizedCoverJobTime !== initialMobileOptimizedCoverJobTime;
 
   const handleClose = () => {
     if (hasUnsavedChanges && !window.confirm("Discard unsaved library settings changes?")) {
@@ -1351,7 +1363,9 @@ const SettingsForm = ({
     scanIntervalMinutes: Number(scanIntervalMinutes),
     queueAlbumTracksOnPlay: initialSettings.queueAlbumTracksOnPlay,
     promptBeforeReplacingQueueOnPlay: initialSettings.promptBeforeReplacingQueueOnPlay,
-    showEntityMetadataOnHeroImage: initialSettings.showEntityMetadataOnHeroImage
+    showEntityMetadataOnHeroImage: initialSettings.showEntityMetadataOnHeroImage,
+    mobileOptimizedCoversEnabled,
+    mobileOptimizedCoverJobTime
   });
 
   const scanElapsedLabel = (() => {
@@ -1477,6 +1491,33 @@ const SettingsForm = ({
         <span>Scan interval in minutes</span>
         <input value={scanIntervalMinutes} onChange={(event) => setScanIntervalMinutes(event.target.value)} inputMode="numeric" required />
       </label>
+      <div className="scan-status-card">
+        <div className="scan-status-row">
+          <strong>Jobs</strong>
+          <span>Nightly mobile cover optimization</span>
+        </div>
+        <label className="toggle-row">
+          <input
+            type="checkbox"
+            checked={mobileOptimizedCoversEnabled}
+            onChange={(event) => setMobileOptimizedCoversEnabled(event.target.checked)}
+          />
+          <div className="toggle-copy">
+            <strong>Generate mobile-sized cover art</strong>
+            <span>Create `cover_mobile500x500.jpg` files for Android-friendly remote and offline artwork.</span>
+          </div>
+        </label>
+        <label className="field">
+          <span>Job time</span>
+          <input
+            type="time"
+            value={mobileOptimizedCoverJobTime}
+            onChange={(event) => setMobileOptimizedCoverJobTime(event.target.value)}
+            disabled={!mobileOptimizedCoversEnabled}
+            required
+          />
+        </label>
+      </div>
       <button className="cta-button full-width" disabled={busy}>
         {busy ? "Saving..." : actionLabel}
       </button>

@@ -182,6 +182,8 @@ const getTrackExtension = (track: SyncTrackRecord) => {
 };
 
 const getBundleKey = (kind: OfflineBundleRecord["kind"], id: string) => `${kind}:${id}`;
+const getMobileCoverArtUrl = (serverUrl: string, coverArtId: string) =>
+  getAbsoluteUrl(serverUrl, `/api/library/cover-art/${encodeURIComponent(coverArtId)}?variant=mobile`);
 
 const syncTrackList = async (
   state: OfflineLibraryState,
@@ -233,7 +235,7 @@ const syncTrackList = async (
     if (track.coverArtId) {
       coverUri = `${COVER_DIRECTORY}/${toSafePathSegment(track.coverArtId)}.jpg`;
       coverUri = await downloadFile(
-        getAbsoluteUrl(serverUrl, `/api/library/cover-art/${encodeURIComponent(track.coverArtId)}`),
+        getMobileCoverArtUrl(serverUrl, track.coverArtId),
         coverUri,
         token
       );
@@ -399,7 +401,7 @@ export const refreshOfflineCoverArt = async (
     if (!refreshedCoverUri) {
       const localCoverUri = `${COVER_DIRECTORY}/${toSafePathSegment(track.coverArtId)}.jpg`;
       refreshedCoverUri = await downloadFile(
-        getAbsoluteUrl(serverUrl, `/api/library/cover-art/${encodeURIComponent(track.coverArtId)}`),
+        getMobileCoverArtUrl(serverUrl, track.coverArtId),
         localCoverUri,
         token,
         undefined,

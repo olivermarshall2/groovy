@@ -1,5 +1,6 @@
 import { createConfig } from "../settings/config.js";
 import { createLibraryRepository } from "../storage/library-repository.js";
+import { createMobileCoverJobs } from "./mobile-cover-jobs.js";
 import { createScanner } from "./scanner.js";
 
 export const createAppContext = () => {
@@ -11,17 +12,23 @@ export const createAppContext = () => {
     scanIntervalMinutes: config.defaultScanIntervalMinutes,
     queueAlbumTracksOnPlay: true,
     promptBeforeReplacingQueueOnPlay: true,
-    showEntityMetadataOnHeroImage: true
+    showEntityMetadataOnHeroImage: true,
+    mobileOptimizedCoversEnabled: true,
+    mobileOptimizedCoverJobTime: "03:00"
   });
   const scanner = createScanner({
     defaultScanIntervalMinutes: config.defaultScanIntervalMinutes,
     repository,
     discogsAuth: config.discogs
   });
+  const mobileCoverJobs = createMobileCoverJobs({
+    repository
+  });
 
   return {
     config,
     repository,
-    scanner
+    scanner,
+    mobileCoverJobs
   };
 };

@@ -166,6 +166,8 @@ export type AppSettings = {
   queueAlbumTracksOnPlay: boolean;
   promptBeforeReplacingQueueOnPlay: boolean;
   showEntityMetadataOnHeroImage: boolean;
+  mobileOptimizedCoversEnabled: boolean;
+  mobileOptimizedCoverJobTime: string;
 };
 
 export type UserApiKeyStatus = {

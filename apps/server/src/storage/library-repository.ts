@@ -305,6 +305,16 @@ export const createLibraryRepository = (databasePath: string) => {
       AND cover_art_data IS NOT NULL
     LIMIT 1
   `);
+  const selectCoverArtTrackPathForTrack = database.prepare("SELECT file_path FROM tracks WHERE id = ? AND cover_art_data IS NOT NULL LIMIT 1");
+  const selectCoverArtTrackPathForAlbum = database.prepare("SELECT file_path FROM tracks WHERE album_id = ? AND cover_art_data IS NOT NULL LIMIT 1");
+  const selectCoverArtTrackPathForBook = database.prepare("SELECT file_path FROM tracks WHERE book_id = ? AND cover_art_data IS NOT NULL LIMIT 1");
+  const selectCoverArtTrackPathForArtist = database.prepare(`
+    SELECT file_path
+    FROM tracks
+    WHERE (artist_id = ? OR album_artist_id = ?)
+      AND cover_art_data IS NOT NULL
+    LIMIT 1
+  `);
   const deleteAllTracks = database.prepare("DELETE FROM tracks");
 
   const selectSettings = database.prepare("SELECT key, value FROM app_settings");
@@ -573,6 +583,14 @@ export const createLibraryRepository = (databasePath: string) => {
       if (!rows.find((row) => row.key === "showEntityMetadataOnHeroImage")) {
         upsertSetting.run("showEntityMetadataOnHeroImage", String(defaultSettings.showEntityMetadataOnHeroImage));
       }
+
+      if (!rows.find((row) => row.key === "mobileOptimizedCoversEnabled")) {
+        upsertSetting.run("mobileOptimizedCoversEnabled", String(defaultSettings.mobileOptimizedCoversEnabled));
+      }
+
+      if (!rows.find((row) => row.key === "mobileOptimizedCoverJobTime")) {
+        upsertSetting.run("mobileOptimizedCoverJobTime", defaultSettings.mobileOptimizedCoverJobTime);
+      }
     },
     getAppSettings(): AppSettings {
       const rows = selectSettings.all() as Array<{ key: string; value: string }>;
@@ -584,7 +602,9 @@ export const createLibraryRepository = (databasePath: string) => {
         scanIntervalMinutes: Number(settingsMap.get("scanIntervalMinutes") ?? "15"),
         queueAlbumTracksOnPlay: parseBooleanSetting(settingsMap.get("queueAlbumTracksOnPlay"), true),
         promptBeforeReplacingQueueOnPlay: parseBooleanSetting(settingsMap.get("promptBeforeReplacingQueueOnPlay"), true),
-        showEntityMetadataOnHeroImage: parseBooleanSetting(settingsMap.get("showEntityMetadataOnHeroImage"), false)
+        showEntityMetadataOnHeroImage: parseBooleanSetting(settingsMap.get("showEntityMetadataOnHeroImage"), false),
+        mobileOptimizedCoversEnabled: parseBooleanSetting(settingsMap.get("mobileOptimizedCoversEnabled"), true),
+        mobileOptimizedCoverJobTime: settingsMap.get("mobileOptimizedCoverJobTime") ?? "03:00"
       };
     },
     updateAppSettings(settings: AppSettings) {
@@ -594,6 +614,8 @@ export const createLibraryRepository = (databasePath: string) => {
       upsertSetting.run("queueAlbumTracksOnPlay", String(settings.queueAlbumTracksOnPlay));
       upsertSetting.run("promptBeforeReplacingQueueOnPlay", String(settings.promptBeforeReplacingQueueOnPlay));
       upsertSetting.run("showEntityMetadataOnHeroImage", String(settings.showEntityMetadataOnHeroImage));
+      upsertSetting.run("mobileOptimizedCoversEnabled", String(settings.mobileOptimizedCoversEnabled));
+      upsertSetting.run("mobileOptimizedCoverJobTime", settings.mobileOptimizedCoverJobTime);
     },
     hasUsers() {
       const row = selectUserCount.get() as { total: number };
@@ -1128,6 +1150,23 @@ export const createLibraryRepository = (databasePath: string) => {
         mimeType: String(row.cover_art_mime),
         data: row.cover_art_data as Uint8Array
       };
+    },
+    getCoverArtTrackPathById(id: string) {
+      let row = selectCoverArtTrackPathForTrack.get(id) as Record<string, unknown> | undefined;
+
+      if (!row && id.startsWith("album:")) {
+        row = selectCoverArtTrackPathForAlbum.get(id) as Record<string, unknown> | undefined;
+      }
+
+      if (!row && id.startsWith("book:")) {
+        row = selectCoverArtTrackPathForBook.get(id) as Record<string, unknown> | undefined;
+      }
+
+      if (!row && id.startsWith("artist:")) {
+        row = selectCoverArtTrackPathForArtist.get(id, id) as Record<string, unknown> | undefined;
+      }
+
+      return row?.file_path ? String(row.file_path) : null;
     }
   };
 };

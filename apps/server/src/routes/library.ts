@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { requireAuth } from "./auth.js";
@@ -7,6 +7,7 @@ import { readAlbumDetailFromNfo } from "../services/nfo-reader.js";
 import { type ScannedTrackArtifact, writeAlbumIdentification } from "../services/library-artifacts.js";
 import { persistBookStateSidecar } from "../services/book-state-sidecar.js";
 import { downloadDiscogsArtwork, downloadDiscogsReleaseCoverArt, lookupDiscogsRelease, searchDiscogsAlbumCandidates } from "../services/discogs.js";
+import { findMobileCoverPathForTrack } from "../services/mobile-cover-jobs.js";
 import { searchMusicBrainzArtist, searchMusicBrainzRelease } from "../services/musicbrainz.js";
 import { lookupTheAudioDbAlbumDescription } from "../services/theaudiodb.js";
 import { updateAlbumTags, updateTrackTags } from "../services/tag-editor.js";
@@ -604,6 +605,25 @@ export const registerLibraryRoutes = async (server: FastifyInstance) => {
   }, async (request, reply) => {
     requireAuth(server, request);
     const { id } = request.params as { id: string };
+    const query = request.query as { variant?: string | string[] | undefined };
+    const variantValue = Array.isArray(query.variant) ? query.variant[0] : query.variant;
+    const variant = typeof variantValue === "string" ? variantValue.trim().toLowerCase() : "";
+    const settings = server.appContext.repository.getAppSettings();
+
+    if (variant === "mobile" && settings.mobileOptimizedCoversEnabled) {
+      const coverArtTrackPath = server.appContext.repository.getCoverArtTrackPathById(id);
+
+      if (coverArtTrackPath) {
+        const mobileCoverPath = await findMobileCoverPathForTrack(coverArtTrackPath);
+
+        if (mobileCoverPath) {
+          const mobileCoverBuffer = await readFile(mobileCoverPath);
+          reply.header("Cache-Control", "private, max-age=86400");
+          return reply.type("image/jpeg").send(mobileCoverBuffer);
+        }
+      }
+    }
+
     const coverArt = server.appContext.repository.getCoverArtById(id);
 
     if (!coverArt) {

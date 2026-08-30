@@ -9,7 +9,9 @@ const settingsSchema = z.object({
   scanIntervalMinutes: z.number().int().positive().max(1440).default(15),
   queueAlbumTracksOnPlay: z.boolean().default(true),
   promptBeforeReplacingQueueOnPlay: z.boolean().default(true),
-  showEntityMetadataOnHeroImage: z.boolean().default(false)
+  showEntityMetadataOnHeroImage: z.boolean().default(false),
+  mobileOptimizedCoversEnabled: z.boolean().default(true),
+  mobileOptimizedCoverJobTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).default("03:00")
 });
 
 const buildApiKeyStatus = (server: FastifyInstance, request: FastifyRequest, userId: string) => {
@@ -88,6 +90,7 @@ export const registerAppRoutes = async (server: FastifyInstance) => {
 
     server.appContext.repository.updateAppSettings(payload);
     server.appContext.scanner.resetSchedule();
+    server.appContext.mobileCoverJobs.resetSchedule();
 
     return {
       settings: server.appContext.repository.getAppSettings()
