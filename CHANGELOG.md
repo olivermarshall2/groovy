@@ -31,6 +31,7 @@ All notable project changes should be recorded here. Keep the newest entry at th
 
 ### Changed
 
+- Restyled the web Settings page so its section tabs match the left navigation language, the save action sits in the header, build info is shown without boxed tiles, and logs render in a plain scrollable text pane.
 - Reduced zero-change scheduled music rescans by only refreshing album artwork and metadata sidecars for folders with changed tracks, deleted tracks, or missing sidecar/artwork files.
 - Added a Logs tab to the web Settings page with browser-side debug diagnostics for startup, route changes, bootstrap timing, library endpoint timings, and environment details useful for investigating slow application loads.
 - Moved library settings into a full Settings page route in the web app while keeping the existing button entry point and left navigation layout.

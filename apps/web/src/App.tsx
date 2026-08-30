@@ -17,6 +17,7 @@ import {
   HatGlasses,
   KeyRound,
   Library,
+  Logs,
   ListEnd,
   ListFilter,
   ListMusic,
@@ -1505,11 +1506,11 @@ const SettingsForm = ({
 
     return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   };
-  const tabItems: Array<{ id: "general" | "folders" | "jobs" | "logs"; label: string }> = [
-    { id: "general", label: "General" },
-    { id: "folders", label: "Folders" },
-    { id: "jobs", label: "Jobs" },
-    { id: "logs", label: "Logs" }
+  const tabItems: Array<{ id: "general" | "folders" | "jobs" | "logs"; label: string; icon: LucideIcon }> = [
+    { id: "general", label: "General", icon: Settings },
+    { id: "folders", label: "Folders", icon: Library },
+    { id: "jobs", label: "Jobs", icon: Clock3 },
+    { id: "logs", label: "Logs", icon: Logs }
   ];
 
   return (
@@ -1525,7 +1526,11 @@ const SettingsForm = ({
           <h2>{title}</h2>
           <p>{description}</p>
         </div>
-        {pageMode ? null : (
+        {pageMode ? (
+          <button className="cta-button settings-save-button" disabled={busy}>
+            {busy ? "Saving..." : actionLabel}
+          </button>
+        ) : (
           <button type="button" className="close-button" onClick={handleClose} aria-label="Close library settings">
             <X className="h-4 w-4" />
           </button>
@@ -1541,13 +1546,14 @@ const SettingsForm = ({
               className={activeTab === tab.id ? "settings-tab-button is-active" : "settings-tab-button"}
               onClick={() => setActiveTab(tab.id)}
             >
+              <tab.icon className="h-4 w-4" />
               {tab.label}
             </button>
           ))}
         </nav>
         <section className="settings-panel">
           {activeTab === "general" ? (
-            <div className="scan-status-card settings-empty-state">
+            <div className="settings-empty-state">
               <div className="scan-status-row">
                 <strong>Build information</strong>
                 <span>Running instance details</span>
@@ -1761,22 +1767,18 @@ const SettingsForm = ({
                 {logs.length === 0 ? (
                   <p className="settings-log-empty">No log entries yet.</p>
                 ) : (
-                  logs.map((entry) => (
-                    <article key={entry.id} className={`settings-log-entry settings-log-entry-${entry.level}`}>
-                      <div className="settings-log-meta">
-                        <strong>{entry.message}</strong>
-                        <span>{new Date(entry.at).toLocaleString()}</span>
-                      </div>
-                      {entry.detail ? <pre>{entry.detail}</pre> : null}
-                    </article>
-                  ))
+                  <pre className="settings-log-plain">
+                    {logs
+                      .map((entry) => `[${new Date(entry.at).toLocaleString()}] ${entry.level.toUpperCase()} ${entry.message}${entry.detail ? `\n${entry.detail}` : ""}`)
+                      .join("\n\n")}
+                  </pre>
                 )}
               </div>
             </div>
           ) : null}
         </section>
       </div>
-      <button className="cta-button full-width" disabled={busy}>
+      <button className={`cta-button full-width${pageMode ? " settings-page-bottom-save" : ""}`} disabled={busy}>
         {busy ? "Saving..." : actionLabel}
       </button>
     </form>
