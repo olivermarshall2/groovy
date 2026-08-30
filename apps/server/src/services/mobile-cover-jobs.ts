@@ -9,7 +9,7 @@ type MobileCoverJobDependencies = {
 
 type SharpLike = {
   default: (input: Uint8Array | Buffer) => {
-    resize: (width: number, height: number, options: { fit: "cover"; position: "centre" }) => {
+    resize: (width: number, height: number, options: { fit: "cover"; position: "center" }) => {
       jpeg: (options: { quality: number; mozjpeg: boolean }) => {
         toBuffer: () => Promise<Buffer>;
       };
@@ -75,6 +75,49 @@ export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies
   let timer: NodeJS.Timeout | undefined;
   let runningJob: Promise<void> | null = null;
   let lastRunDate: string | null = null;
+  const status: {
+    id: "mobile-cover-art";
+    label: string;
+    description: string;
+    isEnabled: boolean;
+    isRunning: boolean;
+    scheduleTime: string | null;
+    processedItems: number;
+    totalItems: number;
+    progressPercent: number;
+    currentItemPath: string | null;
+    lastStartedAt: string | null;
+    lastCompletedAt: string | null;
+    lastError: string | null;
+  } = {
+    id: "mobile-cover-art",
+    label: "Generate mobile cover art",
+    description: "Create cropped 500x500 mobile cover files for faster Android browsing and offline sync.",
+    isEnabled: repository.getAppSettings().mobileOptimizedCoversEnabled,
+    isRunning: false,
+    scheduleTime: repository.getAppSettings().mobileOptimizedCoverJobTime,
+    processedItems: 0,
+    totalItems: 0,
+    progressPercent: 0,
+    currentItemPath: null,
+    lastStartedAt: null,
+    lastCompletedAt: null,
+    lastError: null
+  };
+
+  const syncStatusFromSettings = () => {
+    const settings = repository.getAppSettings();
+    status.isEnabled = settings.mobileOptimizedCoversEnabled;
+    status.scheduleTime = settings.mobileOptimizedCoverJobTime;
+  };
+
+  const updateProgress = () => {
+    status.progressPercent = status.totalItems > 0
+      ? Math.max(0, Math.min(100, Math.round((status.processedItems / status.totalItems) * 100)))
+      : status.isRunning
+        ? 0
+        : 100;
+  };
 
   const generateMobileCoverForFolder = async (folderPath: string) => {
     const sharp = await loadSharp();
@@ -103,7 +146,7 @@ export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies
     const outputBuffer = await sharp.default(sourceBuffer)
       .resize(MOBILE_COVER_SIZE, MOBILE_COVER_SIZE, {
         fit: "cover",
-        position: "centre"
+        position: "center"
       })
       .jpeg({
         quality: MOBILE_COVER_QUALITY,
@@ -127,7 +170,12 @@ export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies
 
     if (!seenFolders.has(canonicalFolder) && folderHasAudioFiles(entries)) {
       seenFolders.add(canonicalFolder);
+      status.totalItems += 1;
+      updateProgress();
+      status.currentItemPath = rootPath;
       await generateMobileCoverForFolder(rootPath);
+      status.processedItems += 1;
+      updateProgress();
     }
 
     for (const entry of entries) {
@@ -141,22 +189,41 @@ export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies
 
   const runJob = async () => {
     const settings = repository.getAppSettings();
+    syncStatusFromSettings();
 
     if (!settings.mobileOptimizedCoversEnabled) {
       return;
     }
 
+    status.isRunning = true;
+    status.lastStartedAt = new Date().toISOString();
+    status.currentItemPath = null;
+    status.processedItems = 0;
+    status.totalItems = 0;
+    status.progressPercent = 0;
+    status.lastError = null;
+
     const roots = uniqueRoots([...settings.libraryRoots, ...settings.bookRoots]);
     const seenFolders = new Set<string>();
 
-    for (const root of roots) {
-      try {
-        await access(root);
-      } catch {
-        continue;
-      }
+    try {
+      for (const root of roots) {
+        try {
+          await access(root);
+        } catch {
+          continue;
+        }
 
-      await walkFolders(root, seenFolders);
+        await walkFolders(root, seenFolders);
+      }
+      status.lastCompletedAt = new Date().toISOString();
+    } catch (error) {
+      status.lastError = error instanceof Error ? error.message : "Mobile cover job failed";
+      throw error;
+    } finally {
+      status.isRunning = false;
+      status.currentItemPath = null;
+      updateProgress();
     }
   };
 
@@ -208,6 +275,7 @@ export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies
   };
 
   const resetSchedule = () => {
+    syncStatusFromSettings();
     if (timer) {
       clearInterval(timer);
       timer = undefined;
@@ -217,7 +285,14 @@ export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies
   };
 
   return {
+    getStatus() {
+      syncStatusFromSettings();
+      return {
+        scheduled: [{ ...status }]
+      };
+    },
     async start() {
+      syncStatusFromSettings();
       schedule();
     },
     async stop() {
@@ -231,6 +306,14 @@ export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies
       }
     },
     resetSchedule,
+    triggerRunNow() {
+      if (runningJob) {
+        return false;
+      }
+
+      startRun();
+      return true;
+    },
     runNow: async () => {
       if (runningJob) {
         await runningJob;

@@ -161,6 +161,13 @@ export const updateSettings = (payload: AppSettings) =>
     body: JSON.stringify(payload)
   });
 
+export const fetchAppJobs = () => getJson<AppBootstrap["jobs"]>("/api/app/jobs");
+
+export const runMobileCoverArtJobNow = () =>
+  sendJson<{ accepted: boolean; alreadyRunning: boolean; jobs: AppBootstrap["jobs"] }>("/api/app/jobs/mobile-cover-art/run-now", {
+    method: "POST"
+  });
+
 export const fetchUserApiKeyStatus = () => getJson<UserApiKeyStatus>("/api/app/api-key");
 
 export const generateUserApiKey = () =>

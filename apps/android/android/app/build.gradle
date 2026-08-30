@@ -93,8 +93,8 @@ android {
         applicationId 'com.mp3platform.android'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 21
-        versionName "0.21.0"
+        versionCode 22
+        versionName "0.22.0"
     }
     signingConfigs {
         debug {

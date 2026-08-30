@@ -1594,6 +1594,82 @@ button {
   gap: 1rem;
 }
 
+.settings-shell {
+  font-size: 0.9375rem;
+}
+
+.settings-layout {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 180px minmax(0, 1fr);
+}
+
+.settings-tabs {
+  display: grid;
+  gap: 0.55rem;
+  align-content: start;
+}
+
+.settings-tab-button {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  padding: 0.8rem 0.95rem;
+  text-align: left;
+  transition: background 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+
+.settings-tab-button.is-active {
+  background: rgba(8, 210, 255, 0.12);
+  border-color: rgba(8, 210, 255, 0.38);
+  color: #fff2e0;
+}
+
+.settings-panel {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.settings-empty-state p,
+.settings-job-copy {
+  color: var(--muted);
+  margin: 0;
+}
+
+.settings-build-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settings-build-item {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.85rem 0.95rem;
+}
+
+.settings-build-item span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.settings-build-item strong {
+  color: #fff2e0;
+  font-size: 0.98rem;
+}
+
+.settings-build-item-wide {
+  grid-column: 1 / -1;
+}
+
 .dialog-header,
 .scan-status-row,
 .scan-actions-row {
@@ -1707,6 +1783,10 @@ button {
   word-break: break-word;
 }
 
+.settings-job-copy {
+  line-height: 1.45;
+}
+
 .scan-errors-pane p {
   color: var(--muted);
   margin: 0;
@@ -1719,6 +1799,28 @@ button {
 
 .scan-error-item strong {
   color: #ffcfbf;
+}
+
+@media (max-width: 780px) {
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .settings-tab-button {
+    text-align: center;
+  }
+
+  .settings-build-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-build-item-wide {
+    grid-column: auto;
+  }
 }
 
 .identify-results {

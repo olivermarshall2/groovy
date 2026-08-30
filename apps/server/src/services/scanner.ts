@@ -79,6 +79,9 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
     queued: false,
     currentFilePath: null,
     currentPhase: null,
+    currentStepLabel: null,
+    phaseProcessedItems: 0,
+    phaseTotalItems: 0,
     lastProgressAt: null,
     recentErrors: []
   };
@@ -103,6 +106,21 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
       status.totalFiles > 0
         ? Math.min(100, Math.round((status.processedFiles / status.totalFiles) * 100))
         : 0;
+    markProgress();
+  };
+
+  const setPhase = (
+    phase: ScanStatus["currentPhase"],
+    currentFilePath: string | null,
+    currentStepLabel: string | null,
+    phaseProcessedItems = 0,
+    phaseTotalItems = 0
+  ) => {
+    status.currentPhase = phase;
+    status.currentFilePath = currentFilePath;
+    status.currentStepLabel = currentStepLabel;
+    status.phaseProcessedItems = phaseProcessedItems;
+    status.phaseTotalItems = phaseTotalItems;
     markProgress();
   };
 
@@ -154,6 +172,7 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
       forceMediaKind?: "music" | "book";
       folderCoverArtCache?: Map<string, Awaited<ReturnType<typeof readFolderCoverArt>>>;
       folderCoverArtModifiedCache?: Map<string, string | null>;
+      existingTracksByPath?: Map<string, TrackRecord>;
     }
   ) => {
     const folderCoverArtCache = options?.folderCoverArtCache ?? new Map<string, Awaited<ReturnType<typeof readFolderCoverArt>>>();
@@ -161,8 +180,7 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
     let entries;
 
     try {
-      status.currentPhase = "discovering";
-      status.currentFilePath = root;
+      setPhase("discovering", root, "Reading folder contents");
       entries = await readDirectoryEntries(root);
     } catch (error) {
       pushError(root, error instanceof Error ? error.message : "Failed to read directory");
@@ -185,7 +203,8 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
         await scanFolder(fullPath, libraryRoot, collectedTracks, seenPathsSet, {
           forceMediaKind: options?.forceMediaKind,
           folderCoverArtCache,
-          folderCoverArtModifiedCache
+          folderCoverArtModifiedCache,
+          existingTracksByPath: options?.existingTracksByPath
         });
         continue;
       }
@@ -199,8 +218,7 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
       if (!AUDIO_EXTENSIONS.has(extension)) {
         continue;
       }
-      status.currentPhase = "reading";
-      status.currentFilePath = fullPath;
+      setPhase("reading", fullPath, "Reading track metadata");
 
       let fileStats;
 
@@ -223,8 +241,10 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
 
       let metadata;
       const forcedBook = options?.forceMediaKind === "book";
-      const existingTrack = repository.getTrackByFilePath(fullPath);
       const fileModifiedAt = fileStats.mtime.toISOString();
+      const existingTrack =
+        options?.existingTracksByPath?.get(normalizedPath) ??
+        repository.getTrackByFilePath(fullPath);
       const folderPath = path.dirname(fullPath);
       let coverArtModifiedAt = folderCoverArtModifiedCache.get(folderPath);
 
@@ -372,6 +392,9 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
     status.progressPercent = 0;
     status.currentFilePath = null;
     status.currentPhase = "discovering";
+    status.currentStepLabel = "Preparing scan";
+    status.phaseProcessedItems = 0;
+    status.phaseTotalItems = 0;
     status.lastProgressAt = status.lastStartedAt;
     seenPaths.clear();
     const settings = repository.getAppSettings();
@@ -386,17 +409,20 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
           continue;
         }
 
-        const collectedTracks: ScannedTrackArtifact[] = [];
-        const isBookRoot = settings.bookRoots.some((bookRoot) => normalizeMediaPath(bookRoot) === normalizeMediaPath(root));
-        await scanFolder(root, root, collectedTracks, seenPaths, {
-          forceMediaKind: isBookRoot ? "book" : "music",
-          folderCoverArtCache: new Map(),
-          folderCoverArtModifiedCache: new Map()
-        });
+      const collectedTracks: ScannedTrackArtifact[] = [];
+      const isBookRoot = settings.bookRoots.some((bookRoot) => normalizeMediaPath(bookRoot) === normalizeMediaPath(root));
+      const existingTracksByPath = new Map(
+        repository.listTracksInFolder(root).map((track) => [normalizeMediaPath(track.filePath), track] as const)
+      );
+      await scanFolder(root, root, collectedTracks, seenPaths, {
+        forceMediaKind: isBookRoot ? "book" : "music",
+        folderCoverArtCache: new Map(),
+        folderCoverArtModifiedCache: new Map(),
+        existingTracksByPath
+      });
 
         if (!isBookRoot) {
-          status.currentPhase = "finalizing";
-          status.currentFilePath = root;
+          setPhase("finalizing", root, "Updating album artwork and metadata sidecars");
           await syncLibraryArtifacts({
             root,
             tracks: collectedTracks,
@@ -406,13 +432,21 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
         }
       }
 
+      setPhase("finalizing", null, "Removing missing tracks from the database");
       repository.pruneMissingTracks(scanRoots, seenPaths);
-      status.currentPhase = "finalizing";
-      status.currentFilePath = "book-state-sidecars";
+      setPhase("finalizing", "book-state-sidecars", "Restoring book progress sidecars");
       await restoreBookStateSidecars(repository);
-      for (const bookId of repository.listTrackedBookIds()) {
+      const trackedBookIds = repository.listTrackedBookIds();
+      setPhase("finalizing", "book-state-sidecars", "Writing book progress sidecars", 0, trackedBookIds.length);
+      for (const [index, bookId] of trackedBookIds.entries()) {
+        status.phaseProcessedItems = index;
+        status.currentStepLabel = `Writing book progress sidecars (${index + 1} of ${trackedBookIds.length})`;
+        markProgress();
         await persistBookStateSidecar(repository, bookId);
+        status.phaseProcessedItems = index + 1;
+        markProgress();
       }
+      setPhase("finalizing", null, "Recording completed scan");
       repository.recordScan({
         completedAt: new Date().toISOString(),
         reason
@@ -424,6 +458,9 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
       status.progressPercent = status.totalFiles > 0 ? 100 : 0;
       status.currentFilePath = null;
       status.currentPhase = null;
+      status.currentStepLabel = null;
+      status.phaseProcessedItems = 0;
+      status.phaseTotalItems = 0;
       status.lastProgressAt = status.lastCompletedAt;
       activeScan = null;
       status.queued = queuedReason !== null;
@@ -450,6 +487,9 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
     status.progressPercent = 0;
     status.currentFilePath = null;
     status.currentPhase = "discovering";
+    status.currentStepLabel = "Preparing scan";
+    status.phaseProcessedItems = 0;
+    status.phaseTotalItems = 0;
     status.lastProgressAt = status.lastStartedAt;
 
     const seenFolderPaths = new Set<string>();
@@ -464,15 +504,32 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
       const collectedTracks: ScannedTrackArtifact[] = [];
       const settings = repository.getAppSettings();
       const isBookFolderScan = settings.bookRoots.some((bookRoot) => normalizeMediaPath(bookRoot) === normalizeMediaPath(folderPath));
+      const existingFolderTracks = repository.listTracksInFolder(folderPath);
+      const existingTracksByPath = new Map(
+        existingFolderTracks.map((track) => [normalizeMediaPath(track.filePath), track] as const)
+      );
+      const affectedBookIds = new Set(
+        existingFolderTracks
+          .map((track) => track.bookId)
+          .filter((bookId): bookId is string => Boolean(bookId))
+      );
       await scanFolder(folderPath, folderPath, collectedTracks, seenFolderPaths, {
         forceMediaKind: isBookFolderScan ? "book" : "music",
         folderCoverArtCache: new Map(),
-        folderCoverArtModifiedCache: new Map()
+        folderCoverArtModifiedCache: new Map(),
+        existingTracksByPath
       });
 
+      if (isBookFolderScan) {
+        for (const track of repository.listTracksInFolder(folderPath)) {
+          if (track.bookId) {
+            affectedBookIds.add(track.bookId);
+          }
+        }
+      }
+
       if (!isBookFolderScan) {
-        status.currentPhase = "finalizing";
-        status.currentFilePath = folderPath;
+        setPhase("finalizing", folderPath, "Updating album artwork and metadata sidecars");
         await syncLibraryArtifacts({
           root: folderPath,
           tracks: collectedTracks,
@@ -480,13 +537,25 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
           discogsAuth
         });
       }
+      setPhase("finalizing", folderPath, "Removing missing tracks from the scanned folder");
       repository.pruneMissingTracksInFolder(folderPath, seenFolderPaths);
-      status.currentPhase = "finalizing";
-      status.currentFilePath = "book-state-sidecars";
-      await restoreBookStateSidecars(repository);
-      for (const bookId of repository.listTrackedBookIds()) {
-        await persistBookStateSidecar(repository, bookId);
+
+      if (isBookFolderScan && affectedBookIds.size > 0) {
+        const trackedBookIds = [...affectedBookIds];
+        setPhase("finalizing", "book-state-sidecars", "Restoring book progress sidecars", 0, trackedBookIds.length);
+        await restoreBookStateSidecars(repository, trackedBookIds);
+        setPhase("finalizing", "book-state-sidecars", "Writing book progress sidecars", 0, trackedBookIds.length);
+        for (const [index, bookId] of trackedBookIds.entries()) {
+          status.phaseProcessedItems = index;
+          status.currentStepLabel = `Writing book progress sidecars (${index + 1} of ${trackedBookIds.length})`;
+          markProgress();
+          await persistBookStateSidecar(repository, bookId);
+          status.phaseProcessedItems = index + 1;
+          markProgress();
+        }
       }
+
+      setPhase("finalizing", null, "Recording completed scan");
       repository.recordScan({
         completedAt: new Date().toISOString(),
         reason
@@ -498,6 +567,9 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
       status.progressPercent = status.totalFiles > 0 ? 100 : 0;
       status.currentFilePath = null;
       status.currentPhase = null;
+      status.currentStepLabel = null;
+      status.phaseProcessedItems = 0;
+      status.phaseTotalItems = 0;
       status.lastProgressAt = status.lastCompletedAt;
     }
   };

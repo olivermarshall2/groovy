@@ -69,6 +69,7 @@ import {
   fetchBootstrap,
   fetchBookDetail,
   fetchBooks,
+  fetchAppJobs,
   fetchLikedTrackIds,
   fetchLibrarySummary,
   fetchPlaylists,
@@ -83,6 +84,7 @@ import {
   recordTrackPlay,
   registerFirstUser,
   requestFolderRescan,
+  runMobileCoverArtJobNow,
   saveBookProgress,
   storeSessionToken,
   type AlbumIdentifyCandidate,
@@ -1271,12 +1273,16 @@ const TrackList = ({
 const SettingsForm = ({
   initialSettings,
   scan,
+  jobs,
+  build,
   busy,
   scanBusy,
+  jobsBusy,
   error,
   onSubmit,
   onScanLibraryRoot,
   onScanBookRoot,
+  onRunMobileCoverJobNow,
   onClose,
   title,
   description,
@@ -1284,12 +1290,16 @@ const SettingsForm = ({
 }: {
   initialSettings: AppSettings;
   scan: AppBootstrap["scan"];
+  jobs: AppBootstrap["jobs"];
+  build: AppBootstrap["build"];
   busy: boolean;
   scanBusy: boolean;
+  jobsBusy: boolean;
   error: string | null;
   onSubmit: (settings: AppSettings) => Promise<void>;
   onScanLibraryRoot: (settings: AppSettings, root: string) => Promise<void>;
   onScanBookRoot: (settings: AppSettings, root: string) => Promise<void>;
+  onRunMobileCoverJobNow: () => Promise<void>;
   onClose: () => void;
   title: string;
   description: string;
@@ -1309,6 +1319,9 @@ const SettingsForm = ({
   const [showScanDetails, setShowScanDetails] = useState(false);
   const [scanElapsedMs, setScanElapsedMs] = useState(0);
   const [scanTarget, setScanTarget] = useState<"music" | "books" | null>(null);
+  const [activeTab, setActiveTab] = useState<"general" | "folders" | "jobs">("folders");
+  const mobileCoverJob = jobs.scheduled.find((job) => job.id === "mobile-cover-art") ?? null;
+  const [jobElapsedMs, setJobElapsedMs] = useState(0);
 
   useEffect(() => {
     setRootPath(initialLibraryRoot);
@@ -1323,6 +1336,24 @@ const SettingsForm = ({
       setScanTarget(null);
     }
   }, [scanBusy]);
+
+  useEffect(() => {
+    if (!mobileCoverJob?.isRunning || !mobileCoverJob.lastStartedAt) {
+      setJobElapsedMs(0);
+      return;
+    }
+
+    const startedAt = new Date(mobileCoverJob.lastStartedAt).getTime();
+
+    const updateElapsed = () => {
+      setJobElapsedMs(Math.max(0, Date.now() - startedAt));
+    };
+
+    updateElapsed();
+    const intervalId = window.setInterval(updateElapsed, 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, [mobileCoverJob?.isRunning, mobileCoverJob?.lastStartedAt]);
 
   useEffect(() => {
     if (!scan.isScanning || !scan.lastStartedAt) {
@@ -1388,10 +1419,38 @@ const SettingsForm = ({
         : scan.currentPhase === "finalizing"
           ? "Finalizing scan"
           : null;
+  const secondsSinceLastProgress = scan.isScanning && scan.lastProgressAt
+    ? Math.max(0, Math.floor((Date.now() - new Date(scan.lastProgressAt).getTime()) / 1000))
+    : null;
+  const scanHeartbeatLabel = secondsSinceLastProgress === null
+    ? null
+    : secondsSinceLastProgress < 10
+      ? "Active just now"
+      : secondsSinceLastProgress < 60
+        ? `Active ${secondsSinceLastProgress}s ago`
+        : `Active ${Math.floor(secondsSinceLastProgress / 60)}m ago`;
+  const currentScanStepLabel = scan.currentStepLabel ?? currentScanPhaseLabel;
+  const formatElapsed = (elapsedMs: number) => {
+    const totalSeconds = Math.floor(elapsedMs / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    if (hours > 0) {
+      return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    }
+
+    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  };
+  const tabItems: Array<{ id: "general" | "folders" | "jobs"; label: string }> = [
+    { id: "general", label: "General" },
+    { id: "folders", label: "Folders" },
+    { id: "jobs", label: "Jobs" }
+  ];
 
   return (
     <form
-      className="auth-form"
+      className="auth-form settings-shell"
       onSubmit={async (event) => {
         event.preventDefault();
         await onSubmit(buildSettingsPayload());
@@ -1407,116 +1466,213 @@ const SettingsForm = ({
         </button>
       </div>
       {error ? <p className="error-banner">{error}</p> : null}
-      <div className="scan-status-card">
-        <div className="scan-status-row">
-          <strong>{scan.isScanning ? "Library scan in progress" : "Library scan idle"}</strong>
-          <span>{scan.progressPercent}%</span>
-        </div>
-        <div className="scan-status-row muted">
-          <span>
-            {scan.isScanning
-              ? `${scan.processedFiles} of ${scan.totalFiles} files processed in ${scanElapsedLabel}`
-              : scan.lastCompletedAt
-                ? `Last completed ${new Date(scan.lastCompletedAt).toLocaleString()}`
-                : "No completed scan yet"}
-          </span>
-          {scan.queued ? <span>Another scan is queued</span> : null}
-        </div>
-        <div className="scan-progress-bar" aria-hidden="true">
-          <div className="scan-progress-fill" style={{ width: `${scan.progressPercent}%` }} />
-        </div>
-        <div className="scan-actions-row">
-          <button type="button" className="ghost-inline-button scan-details-toggle inline-flex items-center gap-2" onClick={() => setShowScanDetails((previous) => !previous)}>
-            {showScanDetails ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-            <span>Details</span>
-            <span>({scan.recentErrors.length} issues)</span>
-          </button>
-        </div>
-        {showScanDetails ? (
-          <div className="scan-errors-pane">
-            {scan.isScanning && (currentScanPhaseLabel || scan.currentFilePath) ? (
-              <div className="scan-details-current">
-                <strong>{currentScanPhaseLabel ?? "Working"}</strong>
-                <span title={scan.currentFilePath ?? undefined}>{scan.currentFilePath ?? ""}</span>
+      <div className="settings-layout">
+        <nav className="settings-tabs" aria-label="Settings sections">
+          {tabItems.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              className={activeTab === tab.id ? "settings-tab-button is-active" : "settings-tab-button"}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+        <section className="settings-panel">
+          {activeTab === "general" ? (
+            <div className="scan-status-card settings-empty-state">
+              <div className="scan-status-row">
+                <strong>Build information</strong>
+                <span>Running instance details</span>
               </div>
-            ) : null}
-            {scan.recentErrors.length === 0 ? (
-              <p>No recent scan errors.</p>
-            ) : (
-              scan.recentErrors.map((issue: ScanError) => (
-                <article key={`${issue.filePath}-${issue.at}`} className="scan-error-item">
-                  <strong>{issue.message}</strong>
-                  <span>{issue.filePath}</span>
-                </article>
-              ))
-            )}
-          </div>
-        ) : null}
-      </div>
-      <label className="field">
-        <span>Music folder root</span>
-        <div className="field-with-action">
-          <input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="C:\\Users\\you\\Music" required />
-          <button
-            type="button"
-            className="pill-button field-action-button"
-            onClick={async () => {
-              setScanTarget("music");
-              await onScanLibraryRoot(buildSettingsPayload(), rootPath.trim());
-            }}
-            disabled={scanBusy || rootPath.trim().length === 0}
-          >
-            {scanBusy && scanTarget === "music" ? "Scanning..." : "Scan"}
-          </button>
-        </div>
-      </label>
-      <label className="field">
-        <span>Book folder</span>
-        <div className="field-with-action">
-          <input value={bookRootPath} onChange={(event) => setBookRootPath(event.target.value)} placeholder="C:\\Users\\you\\Audiobooks" />
-          <button
-            type="button"
-            className="pill-button field-action-button"
-            onClick={async () => {
-              setScanTarget("books");
-              await onScanBookRoot(buildSettingsPayload(), bookRootPath.trim());
-            }}
-            disabled={scanBusy || bookRootPath.trim().length === 0}
-          >
-            {scanBusy && scanTarget === "books" ? "Scanning..." : "Scan"}
-          </button>
-        </div>
-      </label>
-      <label className="field">
-        <span>Scan interval in minutes</span>
-        <input value={scanIntervalMinutes} onChange={(event) => setScanIntervalMinutes(event.target.value)} inputMode="numeric" required />
-      </label>
-      <div className="scan-status-card">
-        <div className="scan-status-row">
-          <strong>Jobs</strong>
-          <span>Nightly mobile cover optimization</span>
-        </div>
-        <label className="toggle-row">
-          <input
-            type="checkbox"
-            checked={mobileOptimizedCoversEnabled}
-            onChange={(event) => setMobileOptimizedCoversEnabled(event.target.checked)}
-          />
-          <div className="toggle-copy">
-            <strong>Generate mobile-sized cover art</strong>
-            <span>Create `cover_mobile500x500.jpg` files for Android-friendly remote and offline artwork.</span>
-          </div>
-        </label>
-        <label className="field">
-          <span>Job time</span>
-          <input
-            type="time"
-            value={mobileOptimizedCoverJobTime}
-            onChange={(event) => setMobileOptimizedCoverJobTime(event.target.value)}
-            disabled={!mobileOptimizedCoversEnabled}
-            required
-          />
-        </label>
+              <div className="settings-build-grid">
+                <div className="settings-build-item">
+                  <span>App version</span>
+                  <strong>{build.appVersion}</strong>
+                </div>
+                <div className="settings-build-item">
+                  <span>Server version</span>
+                  <strong>{build.serverVersion}</strong>
+                </div>
+                <div className="settings-build-item">
+                  <span>Web version</span>
+                  <strong>{build.webVersion}</strong>
+                </div>
+                <div className="settings-build-item">
+                  <span>Shared version</span>
+                  <strong>{build.sharedVersion}</strong>
+                </div>
+                <div className="settings-build-item settings-build-item-wide">
+                  <span>Server started</span>
+                  <strong>{new Date(build.serverStartedAt).toLocaleString()}</strong>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {activeTab === "folders" ? (
+            <>
+              <div className="scan-status-card">
+                <div className="scan-status-row">
+                  <strong>{scan.isScanning ? "Library scan in progress" : "Library scan idle"}</strong>
+                  <span>{scan.progressPercent}%</span>
+                </div>
+                <div className="scan-status-row muted">
+                  <span>
+                    {scan.isScanning
+                      ? `${scan.processedFiles} of ${scan.totalFiles} files processed in ${scanElapsedLabel}`
+                      : scan.lastCompletedAt
+                        ? `Last completed ${new Date(scan.lastCompletedAt).toLocaleString()}`
+                        : "No completed scan yet"}
+                  </span>
+                  <span>{scan.queued ? "Another scan is queued" : scanHeartbeatLabel ?? ""}</span>
+                </div>
+                <div className="scan-progress-bar" aria-hidden="true">
+                  <div className="scan-progress-fill" style={{ width: `${scan.progressPercent}%` }} />
+                </div>
+                {scan.isScanning && currentScanStepLabel ? (
+                  <div className="scan-status-row muted">
+                    <span>{currentScanStepLabel}</span>
+                    {scan.phaseTotalItems > 0 ? <span>{scan.phaseProcessedItems} of {scan.phaseTotalItems}</span> : null}
+                  </div>
+                ) : null}
+                <div className="scan-actions-row">
+                  <button type="button" className="ghost-inline-button scan-details-toggle inline-flex items-center gap-2" onClick={() => setShowScanDetails((previous) => !previous)}>
+                    {showScanDetails ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                    <span>Details</span>
+                    <span>({scan.recentErrors.length} issues)</span>
+                  </button>
+                </div>
+                {showScanDetails ? (
+                  <div className="scan-errors-pane">
+                    {scan.isScanning && (currentScanPhaseLabel || scan.currentFilePath) ? (
+                      <div className="scan-details-current">
+                        <strong>{currentScanStepLabel ?? currentScanPhaseLabel ?? "Working"}</strong>
+                        {scan.phaseTotalItems > 0 ? <span>{scan.phaseProcessedItems} of {scan.phaseTotalItems}</span> : null}
+                        <span title={scan.currentFilePath ?? undefined}>{scan.currentFilePath ?? ""}</span>
+                        {scanHeartbeatLabel ? <span>{scanHeartbeatLabel}</span> : null}
+                      </div>
+                    ) : null}
+                    {scan.recentErrors.length === 0 ? (
+                      <p>No recent scan errors.</p>
+                    ) : (
+                      scan.recentErrors.map((issue: ScanError) => (
+                        <article key={`${issue.filePath}-${issue.at}`} className="scan-error-item">
+                          <strong>{issue.message}</strong>
+                          <span>{issue.filePath}</span>
+                        </article>
+                      ))
+                    )}
+                  </div>
+                ) : null}
+              </div>
+              <label className="field">
+                <span>Music folder root</span>
+                <div className="field-with-action">
+                  <input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="C:\\Users\\you\\Music" required />
+                  <button
+                    type="button"
+                    className="pill-button field-action-button"
+                    onClick={async () => {
+                      setScanTarget("music");
+                      await onScanLibraryRoot(buildSettingsPayload(), rootPath.trim());
+                    }}
+                    disabled={scanBusy || rootPath.trim().length === 0}
+                  >
+                    {scanBusy && scanTarget === "music" ? "Scanning..." : "Scan"}
+                  </button>
+                </div>
+              </label>
+              <label className="field">
+                <span>Book folder</span>
+                <div className="field-with-action">
+                  <input value={bookRootPath} onChange={(event) => setBookRootPath(event.target.value)} placeholder="C:\\Users\\you\\Audiobooks" />
+                  <button
+                    type="button"
+                    className="pill-button field-action-button"
+                    onClick={async () => {
+                      setScanTarget("books");
+                      await onScanBookRoot(buildSettingsPayload(), bookRootPath.trim());
+                    }}
+                    disabled={scanBusy || bookRootPath.trim().length === 0}
+                  >
+                    {scanBusy && scanTarget === "books" ? "Scanning..." : "Scan"}
+                  </button>
+                </div>
+              </label>
+              <label className="field">
+                <span>Scan interval in minutes</span>
+                <input value={scanIntervalMinutes} onChange={(event) => setScanIntervalMinutes(event.target.value)} inputMode="numeric" required />
+              </label>
+            </>
+          ) : null}
+
+          {activeTab === "jobs" ? (
+            <div className="scan-status-card">
+              <div className="scan-status-row">
+                <strong>{mobileCoverJob?.label ?? "Generate mobile cover art"}</strong>
+                <button
+                  type="button"
+                  className="pill-button ghost"
+                  onClick={() => void onRunMobileCoverJobNow()}
+                  disabled={jobsBusy || mobileCoverJob?.isRunning || !mobileOptimizedCoversEnabled}
+                >
+                  {mobileCoverJob?.isRunning ? "Running..." : jobsBusy ? "Starting..." : "Run Now"}
+                </button>
+              </div>
+              <p className="settings-job-copy">{mobileCoverJob?.description ?? "Create cropped mobile artwork for faster Android browsing."}</p>
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
+                  checked={mobileOptimizedCoversEnabled}
+                  onChange={(event) => setMobileOptimizedCoversEnabled(event.target.checked)}
+                />
+                <div className="toggle-copy">
+                  <strong>Enable scheduled job</strong>
+                  <span>Create `cover_mobile500x500.jpg` files for Android-friendly remote and offline artwork.</span>
+                </div>
+              </label>
+              <label className="field">
+                <span>Daily run time</span>
+                <input
+                  type="time"
+                  value={mobileOptimizedCoverJobTime}
+                  onChange={(event) => setMobileOptimizedCoverJobTime(event.target.value)}
+                  disabled={!mobileOptimizedCoversEnabled}
+                  required
+                />
+              </label>
+              <div className="scan-status-row muted">
+                <span>
+                  {mobileCoverJob?.isRunning
+                    ? `${mobileCoverJob.processedItems} of ${mobileCoverJob.totalItems} folders processed in ${formatElapsed(jobElapsedMs)}`
+                    : mobileCoverJob?.lastCompletedAt
+                      ? `Last completed ${new Date(mobileCoverJob.lastCompletedAt).toLocaleString()}`
+                      : "No completed run yet"}
+                </span>
+                <span>{mobileOptimizedCoversEnabled ? `Scheduled for ${mobileOptimizedCoverJobTime}` : "Disabled"}</span>
+              </div>
+              <div className="scan-progress-bar" aria-hidden="true">
+                <div className="scan-progress-fill" style={{ width: `${mobileCoverJob?.progressPercent ?? 0}%` }} />
+              </div>
+              {mobileCoverJob?.currentItemPath ? (
+                <div className="scan-details-current">
+                  <strong>Current folder</strong>
+                  <span title={mobileCoverJob.currentItemPath}>{mobileCoverJob.currentItemPath}</span>
+                </div>
+              ) : null}
+              {mobileCoverJob?.lastError ? (
+                <div className="scan-errors-pane">
+                  <article className="scan-error-item">
+                    <strong>Last run error</strong>
+                    <span>{mobileCoverJob.lastError}</span>
+                  </article>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
       </div>
       <button className="cta-button full-width" disabled={busy}>
         {busy ? "Saving..." : actionLabel}
@@ -1727,6 +1883,7 @@ export const App = () => {
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [folderScanBusy, setFolderScanBusy] = useState(false);
+  const [jobsBusy, setJobsBusy] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode>("register");
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -1946,10 +2103,10 @@ export const App = () => {
 
     const intervalId = window.setInterval(() => {
       void loadBootstrap();
-    }, bootstrap.scan.isScanning ? 1500 : 5000);
+    }, bootstrap.scan.isScanning || bootstrap.jobs.scheduled.some((job) => job.isRunning) ? 1500 : 5000);
 
     return () => window.clearInterval(intervalId);
-  }, [bootstrap?.currentUser, bootstrap?.scan.isScanning]);
+  }, [bootstrap?.currentUser, bootstrap?.scan.isScanning, bootstrap?.jobs]);
 
   useEffect(() => {
     currentTrackRef.current = currentTrack;
@@ -3410,6 +3567,36 @@ export const App = () => {
     }
   };
 
+  const handleRunMobileCoverJobNow = async () => {
+    setJobsBusy(true);
+    setError(null);
+
+    try {
+      const response = await runMobileCoverArtJobNow();
+      setBootstrap((previous) =>
+        previous
+          ? {
+              ...previous,
+              jobs: response.jobs
+            }
+          : previous
+      );
+      const latestJobs = await fetchAppJobs();
+      setBootstrap((previous) =>
+        previous
+          ? {
+              ...previous,
+              jobs: latestJobs
+            }
+          : previous
+      );
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Failed to start mobile cover job");
+    } finally {
+      setJobsBusy(false);
+    }
+  };
+
   const handleDeleteApiKey = async () => {
     if (apiKeyStatus?.hasApiKey && !window.confirm("Delete the current OpenSubsonic API key? Mobile apps using it will stop connecting.")) {
       return;
@@ -3712,12 +3899,16 @@ export const App = () => {
               <SettingsForm
                 initialSettings={bootstrap.settings}
                 scan={bootstrap.scan}
+                jobs={bootstrap.jobs}
+                build={bootstrap.build}
                 busy={savingSettings}
                 scanBusy={folderScanBusy}
+                jobsBusy={jobsBusy}
                 error={error}
                 onSubmit={handleSettingsSave}
                 onScanLibraryRoot={handleFolderScan}
                 onScanBookRoot={handleFolderScan}
+                onRunMobileCoverJobNow={handleRunMobileCoverJobNow}
                 onClose={() => {
                   setError(null);
                   updateRoute({ showSettings: false }, { replace: true });

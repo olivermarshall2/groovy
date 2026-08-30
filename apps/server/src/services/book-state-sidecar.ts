@@ -1,9 +1,10 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { normalizeMediaPath } from "../storage/ids.js";
 import type { LibraryRepository } from "../storage/library-repository.js";
 
-const SIDECAR_FILE_NAME = ".mp3-platform-book-state.json";
+const SIDECAR_FILE_NAME = ".groovy-book-state.json";
+const LEGACY_SIDECAR_FILE_NAMES = [".mp3-platform-book-state.json"];
 
 type SidecarUserState = {
   progress: {
@@ -56,6 +57,9 @@ const toAbsoluteTrackPath = (bookFolderPath: string, relativeTrackPath: string) 
   normalizeMediaPath(path.resolve(bookFolderPath, relativeTrackPath));
 
 const getSidecarPath = (bookFolderPath: string) => path.join(bookFolderPath, SIDECAR_FILE_NAME);
+
+const getLegacySidecarPaths = (bookFolderPath: string) =>
+  LEGACY_SIDECAR_FILE_NAMES.map((fileName) => path.join(bookFolderPath, fileName));
 
 const isPermissionError = (error: unknown) =>
   error instanceof Error &&
@@ -112,6 +116,15 @@ export const persistBookStateSidecar = async (repository: LibraryRepository, boo
   try {
     await mkdir(bookFolderPath, { recursive: true });
     await writeFile(getSidecarPath(bookFolderPath), `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    for (const legacySidecarPath of getLegacySidecarPaths(bookFolderPath)) {
+      try {
+        await rm(legacySidecarPath, { force: true });
+      } catch (error) {
+        if (!isPermissionError(error)) {
+          throw error;
+        }
+      }
+    }
   } catch (error) {
     if (isPermissionError(error)) {
       return;
@@ -142,7 +155,22 @@ export const restoreBookStateSidecars = async (repository: LibraryRepository, bo
     try {
       content = await readFile(getSidecarPath(bookFolderPath), "utf8");
     } catch {
-      continue;
+      let restoredLegacyContent: string | null = null;
+
+      for (const legacySidecarPath of getLegacySidecarPaths(bookFolderPath)) {
+        try {
+          restoredLegacyContent = await readFile(legacySidecarPath, "utf8");
+          break;
+        } catch {
+          continue;
+        }
+      }
+
+      if (!restoredLegacyContent) {
+        continue;
+      }
+
+      content = restoredLegacyContent;
     }
 
     try {

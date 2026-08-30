@@ -131,6 +131,54 @@ const mapBookProgressRow = (row: Record<string, unknown>): BookProgressRecord =>
   updatedAt: String(row.updated_at)
 });
 
+const deriveBooksFromTracks = (tracks: TrackRecord[], userId: string, getLegacyProgress: (bookId: string) => BookProgressRecord | null): BookRecord[] => {
+  const booksById = new Map<string, BookRecord>();
+
+  for (const track of tracks) {
+    if (track.mediaKind !== "book" || !track.bookId) {
+      continue;
+    }
+
+    const existing = booksById.get(track.bookId);
+
+    if (existing) {
+      existing.trackCount += 1;
+      existing.durationSeconds += Math.max(0, track.durationSeconds ?? 0);
+
+      if (!existing.coverArtId && track.coverArtId) {
+        existing.coverArtId = track.coverArtId;
+      }
+
+      continue;
+    }
+
+    const legacyProgress = getLegacyProgress(track.bookId);
+
+    booksById.set(track.bookId, {
+      id: track.bookId,
+      title: track.bookTitle ?? track.album ?? track.title ?? UNKNOWN_ALBUM,
+      author: track.author ?? track.artist ?? track.albumArtist ?? UNKNOWN_ARTIST,
+      trackCount: 1,
+      durationSeconds: Math.max(0, track.durationSeconds ?? 0),
+      coverArtId: track.coverArtId ?? null,
+      lastListenedAt: legacyProgress?.updatedAt ?? null,
+      lastTrackId: legacyProgress?.bookId === track.bookId ? legacyProgress.trackId : null,
+      lastPositionSeconds: legacyProgress?.bookId === track.bookId ? legacyProgress.positionSeconds : null
+    });
+  }
+
+  return [...booksById.values()].sort((left, right) => {
+    const leftTime = left.lastListenedAt ? Date.parse(left.lastListenedAt) : 0;
+    const rightTime = right.lastListenedAt ? Date.parse(right.lastListenedAt) : 0;
+
+    if (leftTime !== rightTime) {
+      return rightTime - leftTime;
+    }
+
+    return left.title.localeCompare(right.title, undefined, { sensitivity: "base" });
+  });
+};
+
 const mapBookProgressStateRow = (row: Record<string, unknown>): BookProgressStateRow => ({
   user_id: String(row.user_id),
   book_id: String(row.book_id),
@@ -245,6 +293,17 @@ export const createLibraryRepository = (databasePath: string) => {
   const selectTracksByAlbum = database.prepare("SELECT * FROM tracks WHERE media_kind = 'music' AND album_id = ? ORDER BY COALESCE(disc_number, 0), COALESCE(track_number, 0), COALESCE(title, file_path) COLLATE NOCASE");
   const selectTracksByAlbumGroup = database.prepare("SELECT * FROM tracks WHERE album_id = ? ORDER BY COALESCE(disc_number, 0), COALESCE(track_number, 0), COALESCE(title, file_path) COLLATE NOCASE");
   const selectTracksByBook = database.prepare("SELECT * FROM tracks WHERE media_kind = 'book' AND book_id = ? ORDER BY COALESCE(disc_number, 0), COALESCE(track_number, 0), COALESCE(title, file_path) COLLATE NOCASE");
+  const selectTracksInFolder = database.prepare(`
+    SELECT *
+    FROM tracks
+    WHERE normalized_file_path = ? OR normalized_file_path LIKE ?
+    ORDER BY normalized_file_path COLLATE NOCASE
+  `);
+  const selectTrackedPathsInFolder = database.prepare(`
+    SELECT normalized_file_path
+    FROM tracks
+    WHERE normalized_file_path = ? OR normalized_file_path LIKE ?
+  `);
   const selectArtists = database.prepare(`
     SELECT
       COALESCE(NULLIF(album_artist_id, ''), artist_id) AS id,
@@ -798,15 +857,16 @@ export const createLibraryRepository = (databasePath: string) => {
       return [...dedupedAlbums.values()];
     },
     listBooks(userId: string) {
-      return (selectBooks.all(userId) as Record<string, unknown>[]).map((row) => {
+      const legacyProgressForBook = (bookId: string) => {
+        const legacyRow = selectBookProgressByBook.get(userId, bookId) as Record<string, unknown> | undefined;
+        return legacyRow ? mapBookProgressRow(legacyRow) : null;
+      };
+      const books = (selectBooks.all(userId) as Record<string, unknown>[]).map((row) => {
         const lastTrackPath = row.last_track_path ? String(row.last_track_path) : null;
         const lastTrack = lastTrackPath ? getTrackByStoredPath(lastTrackPath) : null;
         const legacyProgress = lastTrack
           ? null
-          : (() => {
-              const legacyRow = selectBookProgressByBook.get(userId, String(row.id)) as Record<string, unknown> | undefined;
-              return legacyRow ? mapBookProgressRow(legacyRow) : null;
-            })();
+          : legacyProgressForBook(String(row.id));
 
         return {
           ...mapBookRow(row),
@@ -818,6 +878,12 @@ export const createLibraryRepository = (databasePath: string) => {
                 : null
         };
       });
+
+      if (books.length > 0) {
+        return books;
+      }
+
+      return deriveBooksFromTracks(this.listTracksByBookLibrary(), userId, legacyProgressForBook);
     },
     getBookById(userId: string, bookId: string) {
       return this.listBooks(userId).find((book) => book.id === bookId) ?? null;
@@ -839,6 +905,14 @@ export const createLibraryRepository = (databasePath: string) => {
     },
     listTracksByBook(bookId: string) {
       return (selectTracksByBook.all(bookId) as Record<string, unknown>[]).map(mapTrackRow);
+    },
+    listTracksInFolder(folderPath: string) {
+      const normalizedFolder = normalizeMediaPath(folderPath).replace(/\/+$/, "");
+      const normalizedPrefix = `${normalizedFolder}/%`;
+      return (selectTracksInFolder.all(normalizedFolder, normalizedPrefix) as Record<string, unknown>[]).map(mapTrackRow);
+    },
+    listTracksByBookLibrary() {
+      return this.listTracks().filter((track) => track.mediaKind === "book" && Boolean(track.bookId));
     },
     getTrackById(trackId: string) {
       const row = selectTrackById.get(trackId) as Record<string, unknown> | undefined;
@@ -1012,7 +1086,14 @@ export const createLibraryRepository = (databasePath: string) => {
       return bookmark;
     },
     getBookDetail(userId: string, bookId: string): BookDetailRecord | null {
-      const book = this.getBookById(userId, bookId);
+      const tracks = this.listTracksByBook(bookId);
+      const fallbackBook = tracks.length > 0
+        ? deriveBooksFromTracks(tracks, userId, (targetBookId) => {
+            const legacyRow = selectBookProgressByBook.get(userId, targetBookId) as Record<string, unknown> | undefined;
+            return legacyRow ? mapBookProgressRow(legacyRow) : null;
+          })[0] ?? null
+        : null;
+      const book = this.getBookById(userId, bookId) ?? fallbackBook;
 
       if (!book) {
         return null;
@@ -1020,7 +1101,7 @@ export const createLibraryRepository = (databasePath: string) => {
 
       return {
         book,
-        tracks: this.listTracksByBook(bookId),
+        tracks,
         progress: this.getBookProgress(userId, bookId),
         bookmarks: this.listBookBookmarks(userId, bookId)
       };
@@ -1114,13 +1195,13 @@ export const createLibraryRepository = (databasePath: string) => {
     },
     pruneMissingTracksInFolder(folderPath: string, seenPaths: Set<string>) {
       const normalizedFolder = normalizeMediaPath(folderPath).replace(/\/+$/, "");
-      const normalizedPrefix = `${normalizedFolder}/`;
-      const rows = selectAllTrackedPaths.all() as Array<{ normalized_file_path: string }>;
+      const normalizedPrefix = `${normalizedFolder}/%`;
+      const rows = selectTrackedPathsInFolder.all(normalizedFolder, normalizedPrefix) as Array<{ normalized_file_path: string }>;
 
       for (const row of rows) {
         const trackedPath = row.normalized_file_path;
 
-        if (!trackedPath.startsWith(normalizedPrefix) || seenPaths.has(trackedPath)) {
+        if (seenPaths.has(trackedPath)) {
           continue;
         }
 

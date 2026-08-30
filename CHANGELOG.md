@@ -2,6 +2,17 @@
 
 All notable project changes should be recorded here. Keep the newest entry at the top.
 
+## 0.22.0 - 2026-08-30
+
+### Changed
+
+- Added a server-side fallback that derives books from tracked audiobook chapters when the primary books query returns empty, restoring Android book lists, book detail loading, and book offline sync after the mobile-cover-art update.
+- Reworked the web settings dialog into left-side `General`, `Folders`, and `Jobs` tabs with a slightly smaller settings font and a new build-information panel.
+- Added scheduled mobile cover-art job status reporting plus a `Run Now` action with live progress feedback in the web settings UI.
+- Expanded scan progress feedback so the long finalization phase now reports specific sub-steps, sidecar write counts, and recent heartbeat timing.
+- Renamed audiobook state sidecars from `.mp3-platform-book-state.json` to `.groovy-book-state.json` while preserving one-scan legacy migration support.
+- Optimized rescans of already indexed folders by preloading existing folder tracks, limiting folder prune queries, and restricting book sidecar restore/write work to affected books only.
+
 ## 0.21.0 - 2026-08-30
 
 ### Changed

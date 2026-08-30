@@ -2,6 +2,10 @@ import { access } from "node:fs/promises";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { getAuthenticatedUser, requireAuth } from "./auth.js";
+import rootPackageJson from "../../../../package.json";
+import serverPackageJson from "../../package.json";
+import webPackageJson from "../../../web/package.json";
+import sharedPackageJson from "../../../../packages/shared/package.json";
 
 const settingsSchema = z.object({
   libraryRoots: z.array(z.string().trim().min(1)).min(1),
@@ -28,6 +32,8 @@ const buildApiKeyStatus = (server: FastifyInstance, request: FastifyRequest, use
 };
 
 export const registerAppRoutes = async (server: FastifyInstance) => {
+  const serverStartedAt = new Date().toISOString();
+
   server.get("/preview-login", async (request, reply) => {
     const query = request.query as Record<string, string | string[] | undefined>;
     const tokenValue = Array.isArray(query.token) ? query.token[0] : query.token;
@@ -69,7 +75,15 @@ export const registerAppRoutes = async (server: FastifyInstance) => {
       currentUser: user,
       settings,
       needsLibrarySetup: settings.libraryRoots.length === 0,
-      scan: server.appContext.scanner.getStatus()
+      scan: server.appContext.scanner.getStatus(),
+      jobs: server.appContext.mobileCoverJobs.getStatus(),
+      build: {
+        appVersion: rootPackageJson.version,
+        serverVersion: serverPackageJson.version,
+        webVersion: webPackageJson.version,
+        sharedVersion: sharedPackageJson.version,
+        serverStartedAt
+      }
     };
   });
 
@@ -94,6 +108,21 @@ export const registerAppRoutes = async (server: FastifyInstance) => {
 
     return {
       settings: server.appContext.repository.getAppSettings()
+    };
+  });
+
+  server.get("/api/app/jobs", async (request) => {
+    requireAuth(server, request);
+    return server.appContext.mobileCoverJobs.getStatus();
+  });
+
+  server.post("/api/app/jobs/mobile-cover-art/run-now", async (request) => {
+    requireAuth(server, request);
+    const accepted = server.appContext.mobileCoverJobs.triggerRunNow();
+    return {
+      accepted: true,
+      alreadyRunning: !accepted,
+      jobs: server.appContext.mobileCoverJobs.getStatus()
     };
   });
 

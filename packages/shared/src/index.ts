@@ -170,6 +170,34 @@ export type AppSettings = {
   mobileOptimizedCoverJobTime: string;
 };
 
+export type ScheduledJobStatus = {
+  id: "mobile-cover-art";
+  label: string;
+  description: string;
+  isEnabled: boolean;
+  isRunning: boolean;
+  scheduleTime: string | null;
+  processedItems: number;
+  totalItems: number;
+  progressPercent: number;
+  currentItemPath: string | null;
+  lastStartedAt: string | null;
+  lastCompletedAt: string | null;
+  lastError: string | null;
+};
+
+export type AppJobsStatus = {
+  scheduled: ScheduledJobStatus[];
+};
+
+export type BuildInfo = {
+  appVersion: string;
+  serverVersion: string;
+  webVersion: string;
+  sharedVersion: string;
+  serverStartedAt: string;
+};
+
 export type UserApiKeyStatus = {
   hasApiKey: boolean;
   preview: string | null;
@@ -189,6 +217,8 @@ export type AppBootstrap = {
   settings: AppSettings;
   needsLibrarySetup: boolean;
   scan: ScanStatus;
+  jobs: AppJobsStatus;
+  build: BuildInfo;
 };
 
 export type ScanStatus = {
@@ -202,6 +232,9 @@ export type ScanStatus = {
   queued: boolean;
   currentFilePath: string | null;
   currentPhase: "discovering" | "reading" | "finalizing" | null;
+  currentStepLabel: string | null;
+  phaseProcessedItems: number;
+  phaseTotalItems: number;
   lastProgressAt: string | null;
   recentErrors: ScanError[];
 };
