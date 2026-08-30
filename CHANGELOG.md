@@ -2,6 +2,23 @@
 
 All notable project changes should be recorded here. Keep the newest entry at the top.
 
+## 0.25.0 - 2026-08-30
+
+### Changed
+
+- Added a stronger Android last-good-library snapshot for books and tracks so non-offline books remain visible from cache when a refresh fully fails during temporary server/network outages.
+- Reused the cached track snapshot when opening book detail, allowing non-offline books to open from cached chapters even if the live track refresh is unavailable.
+- Kept the cached library snapshot in sync during playlist and like updates so later lightweight writes do not accidentally discard cached book visibility after a failed refresh.
+
+## 0.24.0 - 2026-08-30
+
+### Changed
+
+- Virtualized the Android Books browser so large audiobook libraries scroll more smoothly like the Albums and Artists pages.
+- Preserved cached audiobook progress badges in derived and offline book collections so `In Progress` and `Complete` status stays visible on Books and author collection cards after app or server restarts.
+- Added consistent Android sync status icons for books across list cards, author collection cards, and the book detail hero image, including visible downloading and queued states.
+- Sped up Android pull-to-refresh when nothing changed on the server by skipping the expensive offline cover-art refresh when the server scan timestamp is unchanged.
+
 ## 0.23.0 - 2026-08-30
 
 ### Changed
@@ -14,6 +31,7 @@ All notable project changes should be recorded here. Keep the newest entry at th
 
 ### Changed
 
+- Reduced zero-change scheduled music rescans by only refreshing album artwork and metadata sidecars for folders with changed tracks, deleted tracks, or missing sidecar/artwork files.
 - Added a Logs tab to the web Settings page with browser-side debug diagnostics for startup, route changes, bootstrap timing, library endpoint timings, and environment details useful for investigating slow application loads.
 - Moved library settings into a full Settings page route in the web app while keeping the existing button entry point and left navigation layout.
 - Improved web app responsiveness by optimizing album, artist, and book grouping logic, memoizing heavy derived library views, and deferring search filtering work.
