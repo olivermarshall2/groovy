@@ -6,6 +6,7 @@ All notable project changes should be recorded here. Keep the newest entry at th
 
 ### Changed
 
+- Kept list-card artwork placeholders visible across Library, Albums, Artists, Authors, Books, and similar web grids until real cover art successfully loads, and stopped failed image requests from collapsing into empty dark panels.
 - Tightened the OpenSubsonic genre normalization pass so strict builds keep the case-collapsed genre list logic type-safe and deployable.
 - Added a defensive web-side genre normalizer and normalized OpenSubsonic `getGenres` output so mixed-case genre labels are collapsed even when older cached or pre-normalized library data is still present.
 - Normalized library genres on the server so genre tags are deduplicated case-insensitively, stored and returned in a consistent sentence-case label, and reused across scans, NFO metadata, OpenSubsonic genre listings, and album-tag edits.

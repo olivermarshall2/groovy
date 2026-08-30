@@ -1079,26 +1079,31 @@ const IncrementalGrid = <T,>({
 };
 
 const CoverArtImage = ({ src, alt }: { src: string | null; alt: string }) => {
-  const [loaded, setLoaded] = useState(false);
+  const [status, setStatus] = useState<"loading" | "loaded" | "error">(src ? "loading" : "error");
 
   useEffect(() => {
-    setLoaded(false);
+    setStatus(src ? "loading" : "error");
   }, [src]);
 
   if (!src) {
-    return <div className="art-placeholder" aria-label={alt} />;
+    return (
+      <div className="art-frame is-error" aria-label={alt}>
+        <div className="art-placeholder" aria-hidden="true" />
+      </div>
+    );
   }
 
   return (
-    <div className={loaded ? "art-frame is-loaded" : "art-frame"}>
+    <div className={status === "loaded" ? "art-frame is-loaded" : status === "error" ? "art-frame is-error" : "art-frame"}>
       <div className="art-placeholder" aria-hidden="true" />
       <img
         className="art-image"
         src={src}
         alt={alt}
         loading="lazy"
-        onLoad={() => setLoaded(true)}
-        onError={() => setLoaded(true)}
+        decoding="async"
+        onLoad={() => setStatus("loaded")}
+        onError={() => setStatus("error")}
       />
     </div>
   );
