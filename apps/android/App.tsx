@@ -210,6 +210,7 @@ type PersistedLibraryCache = {
   tracks: TrackRecord[];
   likedTrackIds: string[];
   summaryText: string;
+  lastScanAt?: string | null;
 };
 
 type PersistedBookProgressEntry = {
@@ -374,6 +375,11 @@ const mergeBooksWithLocalProgress = (
     };
   });
 
+const mergeBookWithLocalProgress = (
+  book: BookRecord,
+  persistedProgress: Record<string, PersistedBookProgressEntry>
+) => mergeBooksWithLocalProgress([book], persistedProgress)[0] ?? book;
+
 const deriveBooksFromTracks = (tracks: TrackRecord[]) => {
   const byBook = new Map<string, BookRecord>();
 
@@ -406,6 +412,26 @@ const deriveBooksFromTracks = (tracks: TrackRecord[]) => {
   }
 
   return [...byBook.values()].sort((left, right) => left.title.localeCompare(right.title, undefined, { sensitivity: "base" }));
+};
+
+const getSyncStatusCardIcon = (status: SyncVisualState, size = 18) => {
+  if (status === "syncing") {
+    return <LoaderCircle color={theme.accent} size={size} strokeWidth={2.2} />;
+  }
+
+  if (status === "queued") {
+    return <Hourglass color={theme.accent} size={size} strokeWidth={2.1} />;
+  }
+
+  if (status === "synced") {
+    return <CloudCheck color={theme.accent} size={size} strokeWidth={2.1} />;
+  }
+
+  if (status === "error") {
+    return <CircleAlert color={theme.danger} size={size} strokeWidth={2.1} />;
+  }
+
+  return <CloudDownload color={theme.text} size={size} strokeWidth={2.1} />;
 };
 
 const isSuspiciousEmptyLibraryResponse = (params: {
@@ -646,6 +672,9 @@ const AppBody = () => {
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
   const [playlistPickerState, setPlaylistPickerState] = useState<PlaylistPickerState | null>(null);
   const [pendingQueueAdvance, setPendingQueueAdvance] = useState<PendingQueueAdvance | null>(null);
+  const [persistedBookProgressCache, setPersistedBookProgressCache] = useState<Record<string, PersistedBookProgressEntry>>({});
+  const [lastLibraryScanAt, setLastLibraryScanAt] = useState<string | null>(null);
+  const [libraryCacheSnapshot, setLibraryCacheSnapshot] = useState<PersistedLibraryCache | null>(null);
   const playerRef = useRef<AudioPlayer | null>(null);
   const playerSubscriptionRef = useRef<{ remove: () => void } | null>(null);
   const queueRef = useRef<QueueEntry[]>([]);
@@ -662,6 +691,8 @@ const AppBody = () => {
   const lastLocalBookProgressSaveRef = useRef<{ bookId: string; checkpoint: number } | null>(null);
   const lastServerBookProgressSaveRef = useRef<{ bookId: string; checkpoint: number } | null>(null);
   const latestBookProgressRef = useRef<{ bookId: string; trackId: string; positionSeconds: number; updatedAt: string } | null>(null);
+  const persistedBookProgressRef = useRef<Record<string, PersistedBookProgressEntry>>({});
+  const libraryCacheSnapshotRef = useRef<PersistedLibraryCache | null>(null);
   const lastExplicitSeekRef = useRef<{ trackId: string; positionSeconds: number; at: number } | null>(null);
   const notificationPermissionRequestedRef = useRef(false);
   const playbackCacheDownloadsRef = useRef<Set<string>>(new Set());
@@ -891,8 +922,12 @@ const AppBody = () => {
   };
 
   const persistLocalBookProgress = async (bookId: string, entry: PersistedBookProgressEntry) => {
-    const nextProgress = await readPersistedBookProgress();
+    const nextProgress = {
+      ...persistedBookProgressRef.current
+    };
     nextProgress[bookId] = entry;
+    persistedBookProgressRef.current = nextProgress;
+    setPersistedBookProgressCache(nextProgress);
     await AsyncStorage.setItem(BOOK_PROGRESS_CACHE_KEY, JSON.stringify(nextProgress));
   };
 
@@ -1144,7 +1179,7 @@ const AppBody = () => {
 
   const offlineBooks = useMemo<BookRecord[]>(
     () =>
-      safeMap(
+      mergeBooksWithLocalProgress(safeMap(
         Object.values(offlineLibrary.bundles)
           .filter((bundle) => bundle.kind === "book")
           .sort((left, right) => right.syncedAt.localeCompare(left.syncedAt)),
@@ -1160,8 +1195,8 @@ const AppBody = () => {
           lastPositionSeconds: null
         }),
         "offlineBooks"
-      ),
-    [offlineLibrary.bundles]
+      ), persistedBookProgressCache),
+    [offlineLibrary.bundles, persistedBookProgressCache]
   );
 
   const offlinePlaylists = useMemo<MobilePlaylistRecord[]>(
@@ -1184,16 +1219,33 @@ const AppBody = () => {
     [offlineLibrary.bundles]
   );
 
+  const cachedLibraryBooks = useMemo<BookRecord[]>(
+    () =>
+      libraryCacheSnapshot?.books
+        ? mergeBooksWithLocalProgress(libraryCacheSnapshot.books, persistedBookProgressCache)
+        : [],
+    [libraryCacheSnapshot, persistedBookProgressCache]
+  );
+  const cachedLibraryTracks = libraryCacheSnapshot?.tracks ?? [];
+
   const derivedTrackBooks = useMemo<BookRecord[]>(() => {
     if (books.length > 0) {
       return [];
     }
 
-    return deriveBooksFromTracks(tracks);
-  }, [books.length, tracks]);
+    const sourceTracks = tracks.length > 0 ? tracks : cachedLibraryTracks;
+    return mergeBooksWithLocalProgress(deriveBooksFromTracks(sourceTracks), persistedBookProgressCache);
+  }, [books.length, tracks, cachedLibraryTracks, persistedBookProgressCache]);
 
   const visibleAlbums = albums.length > 0 ? albums : offlineAlbums;
-  const visibleBooks = books.length > 0 ? books : derivedTrackBooks.length > 0 ? derivedTrackBooks : offlineBooks;
+  const visibleBooks =
+    books.length > 0
+      ? books
+      : derivedTrackBooks.length > 0
+        ? derivedTrackBooks
+        : cachedLibraryBooks.length > 0
+          ? cachedLibraryBooks
+          : offlineBooks;
 
   const filteredAlbums = useMemo(() => {
     const query = searchText.trim().toLowerCase();
@@ -1375,6 +1427,28 @@ const AppBody = () => {
     return {
       book,
       tracks: offlineTracks,
+      progress: null,
+      bookmarks: []
+    };
+  };
+
+  const buildCachedBookDetail = (bookId: string): BookDetailRecord | null => {
+    const book = visibleBooks.find((item) => item.id === bookId) ?? null;
+
+    if (!book) {
+      return null;
+    }
+
+    const sourceTracks = tracks.length > 0 ? tracks : cachedLibraryTracks;
+    const cachedTracks = sortTracksByOrder(sourceTracks.filter((track) => track.bookId === bookId));
+
+    if (cachedTracks.length === 0) {
+      return null;
+    }
+
+    return {
+      book: mergeBookWithLocalProgress(book, persistedBookProgressCache),
+      tracks: cachedTracks,
       progress: null,
       bookmarks: []
     };
@@ -1737,10 +1811,28 @@ const AppBody = () => {
         setLoggingEnabled(nextLoggingEnabled);
         setAppLoggingEnabled(nextLoggingEnabled);
         setLastListenedEntity(storedLastListenedEntity);
+        persistedBookProgressRef.current = storedBookProgress;
+        setPersistedBookProgressCache(storedBookProgress);
 
         if (storedLibraryCache) {
           try {
             const parsedCache = JSON.parse(storedLibraryCache) as Partial<PersistedLibraryCache>;
+            const normalizedCache = {
+              albums: Array.isArray(parsedCache.albums) ? parsedCache.albums : [],
+              books: Array.isArray(parsedCache.books)
+                ? mergeBooksWithLocalProgress(parsedCache.books, storedBookProgress)
+                : [],
+              playlists: Array.isArray(parsedCache.playlists) ? parsedCache.playlists : [],
+              tracks: Array.isArray(parsedCache.tracks) ? parsedCache.tracks : [],
+              likedTrackIds: Array.isArray(parsedCache.likedTrackIds) ? parsedCache.likedTrackIds : [],
+              summaryText:
+                typeof parsedCache.summaryText === "string" && parsedCache.summaryText.length > 0
+                  ? parsedCache.summaryText
+                  : "Your listening library",
+              lastScanAt: typeof parsedCache.lastScanAt === "string" ? parsedCache.lastScanAt : null
+            } satisfies PersistedLibraryCache;
+            libraryCacheSnapshotRef.current = normalizedCache;
+            setLibraryCacheSnapshot(normalizedCache);
             setAlbums(Array.isArray(parsedCache.albums) ? parsedCache.albums : []);
             setBooks(
               Array.isArray(parsedCache.books)
@@ -1753,19 +1845,8 @@ const AppBody = () => {
             if (typeof parsedCache.summaryText === "string" && parsedCache.summaryText.length > 0) {
               setSummaryText(parsedCache.summaryText);
             }
-            await syncNativeMediaBrowserLibraryCache({
-              albums: Array.isArray(parsedCache.albums) ? parsedCache.albums : [],
-              books: Array.isArray(parsedCache.books)
-                ? mergeBooksWithLocalProgress(parsedCache.books, storedBookProgress)
-                : [],
-              playlists: Array.isArray(parsedCache.playlists) ? parsedCache.playlists : [],
-              tracks: Array.isArray(parsedCache.tracks) ? parsedCache.tracks : [],
-              likedTrackIds: Array.isArray(parsedCache.likedTrackIds) ? parsedCache.likedTrackIds : [],
-              summaryText:
-                typeof parsedCache.summaryText === "string" && parsedCache.summaryText.length > 0
-                  ? parsedCache.summaryText
-                  : "Your listening library"
-            });
+            setLastLibraryScanAt(typeof parsedCache.lastScanAt === "string" ? parsedCache.lastScanAt : null);
+            await syncNativeMediaBrowserLibraryCache(normalizedCache);
           } catch (cacheError) {
             await logError("Persisted library cache restore failed", cacheError);
           }
@@ -2025,7 +2106,7 @@ const AppBody = () => {
     }
   };
 
-  const refreshLibrary = async (options?: { showBusy?: boolean; notifyOnFailure?: boolean }) => {
+  const refreshLibrary = async (options?: { showBusy?: boolean; notifyOnFailure?: boolean; refreshOfflineCovers?: boolean }) => {
     if (!serverUrl || !token) {
       return;
     }
@@ -2041,7 +2122,8 @@ const AppBody = () => {
         serverUrl,
         hasToken: Boolean(token),
         showBusy,
-        notifyOnFailure: Boolean(options?.notifyOnFailure)
+        notifyOnFailure: Boolean(options?.notifyOnFailure),
+        refreshOfflineCovers: Boolean(options?.refreshOfflineCovers)
       });
       const endpointResults = await Promise.all([
         (async () => {
@@ -2231,26 +2313,44 @@ const AppBody = () => {
           playlists: nextPlaylists,
           tracks: nextTracks,
           likedTrackIds: likes.trackIds,
-          summaryText: summary.lastScanAt ? `${summary.trackCount} tracks indexed` : "Scan your library to begin"
+          summaryText: summary.lastScanAt ? `${summary.trackCount} tracks indexed` : "Scan your library to begin",
+          lastScanAt: summary.lastScanAt
         } satisfies PersistedLibraryCache;
         await AsyncStorage.setItem(
           LIBRARY_CACHE_KEY,
           JSON.stringify(nextLibraryCache)
         );
+        libraryCacheSnapshotRef.current = nextLibraryCache;
+        setLibraryCacheSnapshot(nextLibraryCache);
         await syncNativeMediaBrowserLibraryCache(nextLibraryCache);
+        setLastLibraryScanAt(summary.lastScanAt);
       }
 
       if (resolvedBooks && !preserveExistingBooks) {
         void reconcileBookProgressWithServer(resolvedBooks, persistedBookProgress, "refreshLibrary");
       }
 
-      if (Object.keys(offlineLibraryRef.current.bundles).length > 0) {
+      const shouldRefreshOfflineCovers =
+        Boolean(options?.refreshOfflineCovers) &&
+        Object.keys(offlineLibraryRef.current.bundles).length > 0 &&
+        Boolean(summary?.lastScanAt) &&
+        summary?.lastScanAt !== lastLibraryScanAt;
+
+      if (shouldRefreshOfflineCovers) {
         const nextOfflineLibrary = await refreshOfflineCoverArt(offlineLibraryRef.current, serverUrl, token);
         offlineLibraryRef.current = nextOfflineLibrary;
         setOfflineLibrary(nextOfflineLibrary);
         await logInfo("Offline cover art refreshed after library refresh", {
           serverUrl,
-          bundleCount: Object.keys(nextOfflineLibrary.bundles).length
+          bundleCount: Object.keys(nextOfflineLibrary.bundles).length,
+          previousScanAt: lastLibraryScanAt,
+          nextScanAt: summary?.lastScanAt ?? null
+        });
+      } else if (options?.refreshOfflineCovers && Object.keys(offlineLibraryRef.current.bundles).length > 0) {
+        await logInfo("Offline cover art refresh skipped because library scan timestamp is unchanged", {
+          serverUrl,
+          previousScanAt: lastLibraryScanAt,
+          nextScanAt: summary?.lastScanAt ?? null
         });
       }
 
@@ -2325,7 +2425,7 @@ const AppBody = () => {
     setRefreshing(true);
 
     try {
-      await refreshLibrary({ showBusy: false, notifyOnFailure: true });
+      await refreshLibrary({ showBusy: false, notifyOnFailure: true, refreshOfflineCovers: true });
 
       if (view === "downloads") {
         await refreshDiagnostics();
@@ -2336,12 +2436,29 @@ const AppBody = () => {
       }
 
       if (view === "library" && currentItem?.type === "book") {
-        const [detail, persistedProgress] = await Promise.all([
-          fetchBookDetail(apiOptions, currentItem.id),
-          readPersistedBookProgress()
-        ]);
-        setBookServerProgress(detail.progress ?? null);
-        setBookDetail(mergeBookProgress(detail, persistedProgress[currentItem.id] ?? null));
+        try {
+          const [detail, persistedProgress] = await Promise.all([
+            fetchBookDetail(apiOptions, currentItem.id),
+            readPersistedBookProgress()
+          ]);
+          persistedBookProgressRef.current = persistedProgress;
+          setPersistedBookProgressCache(persistedProgress);
+          setBookServerProgress(detail.progress ?? null);
+          setBookDetail(mergeBookProgress(detail, persistedProgress[currentItem.id] ?? null));
+        } catch (error) {
+          const cachedDetail = buildCachedBookDetail(currentItem.id) ?? buildOfflineBookDetail(currentItem.id);
+
+          if (cachedDetail) {
+            setBookServerProgress(null);
+            setBookDetail(mergeBookProgress(cachedDetail, persistedBookProgressRef.current[currentItem.id] ?? null));
+            await logInfo("Pull to refresh preserved cached book detail after server failure", {
+              bookId: currentItem.id,
+              trackCount: cachedDetail.tracks.length
+            });
+          } else {
+            throw error;
+          }
+        }
       }
 
       await logInfo("Pull to refresh completed", {
@@ -2390,12 +2507,15 @@ const AppBody = () => {
         playlists,
         tracks,
         likedTrackIds: nextLikedIds,
-        summaryText
+        summaryText,
+        lastScanAt: lastLibraryScanAt
       } satisfies PersistedLibraryCache;
       await AsyncStorage.setItem(
         LIBRARY_CACHE_KEY,
         JSON.stringify(nextLibraryCache)
       );
+      libraryCacheSnapshotRef.current = nextLibraryCache;
+      setLibraryCacheSnapshot(nextLibraryCache);
       await syncNativeMediaBrowserLibraryCache(nextLibraryCache);
 
       if (currentTrack?.id === track.id) {
@@ -2433,12 +2553,15 @@ const AppBody = () => {
       playlists: nextPlaylists,
       tracks,
       likedTrackIds: Array.from(likedTrackIds),
-      summaryText
+      summaryText,
+      lastScanAt: lastLibraryScanAt
     } satisfies PersistedLibraryCache;
     await AsyncStorage.setItem(
       LIBRARY_CACHE_KEY,
       JSON.stringify(nextLibraryCache)
     );
+    libraryCacheSnapshotRef.current = nextLibraryCache;
+    setLibraryCacheSnapshot(nextLibraryCache);
     await syncNativeMediaBrowserLibraryCache(nextLibraryCache);
   };
 
@@ -3761,7 +3884,9 @@ const AppBody = () => {
 
   const openBook = async (bookId: string) => {
     const offlineDetail = buildOfflineBookDetail(bookId);
-    const hasImmediateOfflineDetail = Boolean(offlineDetail);
+    const cachedDetail = buildCachedBookDetail(bookId);
+    const immediateDetail = offlineDetail ?? cachedDetail;
+    const hasImmediateOfflineDetail = Boolean(immediateDetail);
 
     setBusy(!hasImmediateOfflineDetail);
     setCurrentItem({ type: "book", id: bookId });
@@ -3769,18 +3894,21 @@ const AppBody = () => {
     setLibraryMode("books");
     setAlbumDetail(null);
 
-    if (offlineDetail) {
+    if (immediateDetail) {
       try {
         const persistedProgress = await readPersistedBookProgress();
+        persistedBookProgressRef.current = persistedProgress;
+        setPersistedBookProgressCache(persistedProgress);
         setBookServerProgress(null);
-        setBookDetail(mergeBookProgress(offlineDetail, persistedProgress[bookId] ?? null));
-        await logInfo("Book opened from offline bundle immediately", {
+        setBookDetail(mergeBookProgress(immediateDetail, persistedProgress[bookId] ?? null));
+        await logInfo("Book opened from cached data immediately", {
           bookId,
-          trackCount: offlineDetail.tracks.length,
+          trackCount: immediateDetail.tracks.length,
+          source: offlineDetail ? "offline-bundle" : "cached-tracks",
           hasPersistedProgress: Boolean(persistedProgress[bookId])
         });
       } catch (error) {
-        await logError("Immediate offline book detail load failed", error, { bookId });
+        await logError("Immediate cached book detail load failed", error, { bookId });
       }
     }
 
@@ -3789,6 +3917,8 @@ const AppBody = () => {
         fetchBookDetail(apiOptions, bookId),
         readPersistedBookProgress()
       ]);
+      persistedBookProgressRef.current = persistedProgress;
+      setPersistedBookProgressCache(persistedProgress);
       setBookServerProgress(serverDetail.progress ?? null);
       setBookDetail(mergeBookProgress(serverDetail, persistedProgress[bookId] ?? null));
       await logInfo("Book detail refreshed from server", {
@@ -3797,13 +3927,16 @@ const AppBody = () => {
         hasServerProgress: Boolean(serverDetail.progress)
       });
     } catch (error) {
-      if (offlineDetail) {
+      if (immediateDetail) {
         const persistedProgress = await readPersistedBookProgress();
+        persistedBookProgressRef.current = persistedProgress;
+        setPersistedBookProgressCache(persistedProgress);
         setBookServerProgress(null);
-        setBookDetail(mergeBookProgress(offlineDetail, persistedProgress[bookId] ?? null));
-        await logInfo("Book opened from offline bundle after server fetch failed", {
+        setBookDetail(mergeBookProgress(immediateDetail, persistedProgress[bookId] ?? null));
+        await logInfo("Book preserved cached detail after server fetch failed", {
           bookId,
-          trackCount: offlineDetail.tracks.length
+          trackCount: immediateDetail.tracks.length,
+          source: offlineDetail ? "offline-bundle" : "cached-tracks"
         });
       } else {
         await logError("Book detail load failed", error, { bookId });
@@ -4374,6 +4507,38 @@ const AppBody = () => {
         offlineUri: artist.coverUri,
         onPress: () => openArtist(artist.id)
       }), "artistCardItems");
+  const bookCardItems = safeMap(filteredBooks, (book) => {
+        const progress = book.lastTrackId
+          ? {
+              trackId: book.lastTrackId,
+              positionSeconds: book.lastPositionSeconds ?? 0
+            }
+          : null;
+        const bookTracks = tracks.filter((track) => track.bookId === book.id);
+        const syncState = getBundleVisualState("book", book.id);
+
+        return {
+          key: book.id,
+          title: book.title,
+          subtitle: book.author,
+          accent: null,
+          artBadgeAlign: "right" as const,
+          artCornerIcon: syncState !== "idle" ? getSyncStatusCardIcon(syncState) : undefined,
+          artCornerIconAlign: "right" as const,
+          artBadge: isBookCompleted(progress, bookTracks) ? (
+            <View style={[styles.cardArtBadge, styles.cardArtBadgeComplete]}>
+              <Text style={[styles.cardArtBadgeText, styles.cardArtBadgeTextComplete]}>Complete</Text>
+            </View>
+          ) : isBookInProgress(progress, bookTracks) ? (
+            <View style={[styles.cardArtBadge, styles.cardArtBadgeProgress]}>
+              <Text style={styles.cardArtBadgeText}>In Progress</Text>
+            </View>
+          ) : undefined,
+          remoteUri: getCoverRemoteUri(book.coverArtId),
+          offlineUri: offlineLibrary.bundles[`book:${book.id}`]?.coverUri ?? null,
+          onPress: () => void openBook(book.id)
+        };
+      }, "bookCardItems");
   const recentBooks = visibleBooks.slice(0, 4);
   const recentArtists = filteredArtists.slice(0, 4);
   const recentPlaylists = fallbackVisiblePlaylists.slice(0, 4);
@@ -4384,6 +4549,7 @@ const AppBody = () => {
   const mobileDockHeight = mobileNavHeight + mobilePlayerHeight + 12;
   const showVirtualizedAlbumBrowser = !busy && view === "library" && libraryMode === "albums" && (!currentItem || currentItem.type !== "album");
   const showVirtualizedArtistBrowser = !busy && view === "library" && libraryMode === "artists" && (!currentItem || currentItem.type !== "artist");
+  const showVirtualizedBookBrowser = !busy && view === "library" && libraryMode === "books" && (!currentItem || currentItem.type !== "book");
   const albumGridColumns = isTablet ? 3 : 2;
   const syncedBundles = safeMap(Object.entries(offlineLibrary.bundles), ([key, bundle]) => ({ key, bundle }), "syncedBundles")
     .sort((left, right) => right.bundle.syncedAt.localeCompare(left.bundle.syncedAt));
@@ -5180,6 +5346,70 @@ const AppBody = () => {
               windowSize={7}
               updateCellsBatchingPeriod={16}
             />
+          ) : showVirtualizedBookBrowser ? (
+            <FlatList
+              data={bookCardItems}
+              key={`book-grid-${albumGridColumns}`}
+              keyExtractor={(item) => item.key}
+              numColumns={albumGridColumns}
+              columnWrapperStyle={albumGridColumns > 1 ? styles.albumListRow : undefined}
+              contentContainerStyle={[
+                styles.scrollContent,
+                styles.albumListContent,
+                isPhone && { paddingBottom: mobileDockHeight + 18 }
+              ]}
+              refreshControl={
+                token && serverUrl ? (
+                  <RefreshControl
+                    refreshing={refreshing}
+                    onRefresh={() => {
+                      void handlePullToRefresh();
+                    }}
+                    tintColor={theme.accent}
+                    colors={[theme.accent]}
+                    progressBackgroundColor={theme.panel}
+                  />
+                ) : undefined
+              }
+              ListHeaderComponent={
+                <View style={styles.albumListHeader}>
+                  {statusNotice ? (
+                    <View style={styles.statusNotice}>
+                      <CircleAlert color={theme.accent} size={16} strokeWidth={2.2} />
+                      <Text style={styles.statusNoticeText}>{statusNotice}</Text>
+                    </View>
+                  ) : null}
+                  <View style={styles.topbar}>
+                    <Text style={styles.pageTitle}>Books</Text>
+                  </View>
+                  {featuredBook ? (
+                    <FeaturedEntityHero
+                      eyebrow="Featured Book"
+                      title={featuredBook.title}
+                      subtitle={`${featuredBook.author} · ${featuredBook.trackCount} chapters`}
+                      remoteUri={getCoverRemoteUri(featuredBook.coverArtId)}
+                      offlineUri={offlineLibrary.bundles[`book:${featuredBook.id}`]?.coverUri ?? null}
+                      token={token}
+                      primaryLabel="Open Book"
+                      onPrimaryPress={() => void openBook(featuredBook.id)}
+                      syncStatus={getBundleVisualState("book", featuredBook.id)}
+                      onSyncPress={() => void syncBundle("book", featuredBook.id)}
+                    />
+                  ) : null}
+                </View>
+              }
+              ListEmptyComponent={<Text style={styles.emptyStateText}>No books are available yet.</Text>}
+              renderItem={({ item }) => (
+                <View style={[styles.albumGridCell, albumGridColumns === 3 && styles.albumGridCellTablet]}>
+                  <LibraryCard item={item} token={token} />
+                </View>
+              )}
+              removeClippedSubviews
+              initialNumToRender={12}
+              maxToRenderPerBatch={8}
+              windowSize={7}
+              updateCellsBatchingPeriod={16}
+            />
           ) : (
           <ScrollView
             contentContainerStyle={[
@@ -5484,6 +5714,7 @@ const AppBody = () => {
                           ? "In progress"
                           : null
                     }
+                    heroCornerIcon={getSyncStatusCardIcon(getBundleVisualState("book", bookDetail.book.id), 16)}
                     trailingStatusIcons={
                       isBookCompleted(bookDetail.progress, bookDetail.tracks)
                         ? [<CircleCheck key="book-complete" color="#65d46e" size={16} strokeWidth={2.2} />]
@@ -5621,19 +5852,40 @@ const AppBody = () => {
                           items={artistBooks.map((book) => ({
                             key: book.id,
                             title: book.title,
-                            subtitle: `${book.trackCount} chapters · ${formatDuration(book.durationSeconds)}`,
-                            accent: getBundleBadgeLabel("book", book.id),
-                            icon: isBookCompleted(
-                              book.lastTrackId
+                            subtitle: book.author,
+                            accent: null,
+                            artBadgeAlign: "right",
+                            artCornerIcon: getBundleVisualState("book", book.id) !== "idle"
+                              ? getSyncStatusCardIcon(getBundleVisualState("book", book.id))
+                              : undefined,
+                            artCornerIconAlign: "right",
+                            artBadge: (() => {
+                              const progress = book.lastTrackId
                                 ? {
                                     trackId: book.lastTrackId,
                                     positionSeconds: book.lastPositionSeconds ?? 0
                                   }
-                                : null,
-                              tracks.filter((track) => track.bookId === book.id)
-                            ) ? (
-                              <CircleCheck color="#65d46e" size={16} strokeWidth={2.2} />
-                            ) : undefined,
+                                : null;
+                              const bookTracks = tracks.filter((track) => track.bookId === book.id);
+
+                              if (isBookCompleted(progress, bookTracks)) {
+                                return (
+                                  <View style={[styles.cardArtBadge, styles.cardArtBadgeComplete]}>
+                                    <Text style={[styles.cardArtBadgeText, styles.cardArtBadgeTextComplete]}>Complete</Text>
+                                  </View>
+                                );
+                              }
+
+                              if (isBookInProgress(progress, bookTracks)) {
+                                return (
+                                  <View style={[styles.cardArtBadge, styles.cardArtBadgeProgress]}>
+                                    <Text style={styles.cardArtBadgeText}>In Progress</Text>
+                                  </View>
+                                );
+                              }
+
+                              return undefined;
+                            })(),
                             remoteUri: getCoverRemoteUri(book.coverArtId),
                             offlineUri: offlineLibrary.bundles[`book:${book.id}`]?.coverUri ?? null,
                             onPress: () => void openBook(book.id)
@@ -5710,47 +5962,7 @@ const AppBody = () => {
                       />
                     ) : null}
                   <CardGrid
-                    items={filteredBooks.map((book) => ({
-                      key: book.id,
-                      title: book.title,
-                      subtitle: book.author,
-                      accent: null,
-                      artBadgeAlign: "right",
-                      artCornerIcon: getBundleVisualState("book", book.id) === "synced"
-                        ? <CloudCheck color={theme.accent} size={18} strokeWidth={2.2} />
-                        : undefined,
-                      artCornerIconAlign: "right",
-                      artBadge: (() => {
-                        const progress = book.lastTrackId
-                          ? {
-                              trackId: book.lastTrackId,
-                              positionSeconds: book.lastPositionSeconds ?? 0
-                            }
-                          : null;
-                        const bookTracks = tracks.filter((track) => track.bookId === book.id);
-
-                        if (isBookCompleted(progress, bookTracks)) {
-                          return (
-                            <View style={[styles.cardArtBadge, styles.cardArtBadgeComplete]}>
-                              <Text style={[styles.cardArtBadgeText, styles.cardArtBadgeTextComplete]}>Complete</Text>
-                            </View>
-                          );
-                        }
-
-                        if (isBookInProgress(progress, bookTracks)) {
-                          return (
-                            <View style={[styles.cardArtBadge, styles.cardArtBadgeProgress]}>
-                              <Text style={styles.cardArtBadgeText}>In Progress</Text>
-                            </View>
-                          );
-                        }
-
-                        return undefined;
-                      })(),
-                      remoteUri: getCoverRemoteUri(book.coverArtId),
-                      offlineUri: offlineLibrary.bundles[`book:${book.id}`]?.coverUri ?? null,
-                      onPress: () => void openBook(book.id)
-                    }))}
+                    items={bookCardItems}
                     token={token}
                   />
                   </>
@@ -6810,6 +7022,7 @@ const DetailCard = ({
   onExtraAction,
   extraActionLabel,
   heroBadgeLabel,
+  heroCornerIcon,
   trailingStatusIcons,
   children
 }: {
@@ -6834,6 +7047,7 @@ const DetailCard = ({
   onExtraAction?: (() => void) | null;
   extraActionLabel?: string;
   heroBadgeLabel?: string | null;
+  heroCornerIcon?: ReactNode;
   trailingStatusIcons?: ReactNode[];
   children: ReactNode;
 }) => {
@@ -6944,6 +7158,11 @@ const DetailCard = ({
             end={{ x: 1, y: 0.5 }}
             style={styles.detailHeaderShade}
           />
+          {heroCornerIcon ? (
+            <View style={[styles.cardArtCornerIconWrap, styles.cardArtCornerIconWrapRight, styles.detailHeroCornerIconWrap]}>
+              {heroCornerIcon}
+            </View>
+          ) : null}
         </View>
       ) : null}
       <View style={styles.detailHeaderCopy}>
@@ -8242,6 +8461,10 @@ const styles = StyleSheet.create({
   cardArtCornerIconWrapRight: {
     left: undefined,
     right: 10
+  },
+  detailHeroCornerIconWrap: {
+    bottom: 12,
+    right: 12
   },
   cardTitle: {
     color: theme.text,

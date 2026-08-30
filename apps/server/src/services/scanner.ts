@@ -16,8 +16,10 @@ type ScannerDependencies = {
 };
 
 const AUDIO_EXTENSIONS = new Set([".mp3", ".flac", ".m4b"]);
+const ARTWORK_EXTENSIONS = new Set([".jpg", ".jpeg", ".png"]);
 const MAX_RECENT_ERRORS = 20;
 const FILE_OPERATION_TIMEOUT_MS = 20_000;
+const REQUIRED_MUSIC_SIDECAR_NAMES = ["album.nfo", "artist.nfo"];
 
 const uniqueRoots = (roots: string[]) => [...new Set(roots.map((root) => root.trim()).filter(Boolean))];
 
@@ -163,6 +165,17 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
   const readFolderCoverArtWithTimeout = (filePath: string, libraryRoot?: string) =>
     withTimeout(readFolderCoverArt(filePath, libraryRoot), FILE_OPERATION_TIMEOUT_MS, "Cover art read", filePath);
 
+  const folderNeedsMusicArtifactRefresh = (entries: Awaited<ReturnType<typeof readDirectoryEntries>>) => {
+    const fileNames = new Set(
+      entries
+        .filter((entry) => entry.isFile())
+        .map((entry) => entry.name.toLowerCase())
+    );
+    const hasArtwork = [...fileNames].some((name) => ARTWORK_EXTENSIONS.has(path.extname(name)));
+    const missingSidecar = REQUIRED_MUSIC_SIDECAR_NAMES.some((name) => !fileNames.has(name));
+    return missingSidecar || !hasArtwork;
+  };
+
   const scanFolder = async (
     root: string,
     libraryRoot: string,
@@ -173,6 +186,7 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
       folderCoverArtCache?: Map<string, Awaited<ReturnType<typeof readFolderCoverArt>>>;
       folderCoverArtModifiedCache?: Map<string, string | null>;
       existingTracksByPath?: Map<string, TrackRecord>;
+      changedArtifactFolders?: Set<string>;
     }
   ) => {
     const folderCoverArtCache = options?.folderCoverArtCache ?? new Map<string, Awaited<ReturnType<typeof readFolderCoverArt>>>();
@@ -194,6 +208,10 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
     if (audioEntries.length > 0) {
       status.totalFiles += audioEntries.length;
       updateProgress();
+
+      if (options?.forceMediaKind !== "book" && folderNeedsMusicArtifactRefresh(entries)) {
+        options?.changedArtifactFolders?.add(path.resolve(root));
+      }
     }
 
     for (const entry of entries) {
@@ -204,7 +222,8 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
           forceMediaKind: options?.forceMediaKind,
           folderCoverArtCache,
           folderCoverArtModifiedCache,
-          existingTracksByPath: options?.existingTracksByPath
+          existingTracksByPath: options?.existingTracksByPath,
+          changedArtifactFolders: options?.changedArtifactFolders
         });
         continue;
       }
@@ -378,6 +397,7 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
         musicBrainzArtistId: metadata.musicBrainzArtistId,
         musicBrainzAlbumArtistId: metadata.musicBrainzAlbumArtistId
       });
+      options?.changedArtifactFolders?.add(path.resolve(folderPath));
       status.processedFiles += 1;
       updateProgress();
     }
@@ -409,26 +429,42 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
           continue;
         }
 
-      const collectedTracks: ScannedTrackArtifact[] = [];
-      const isBookRoot = settings.bookRoots.some((bookRoot) => normalizeMediaPath(bookRoot) === normalizeMediaPath(root));
-      const existingTracksByPath = new Map(
-        repository.listTracksInFolder(root).map((track) => [normalizeMediaPath(track.filePath), track] as const)
-      );
-      await scanFolder(root, root, collectedTracks, seenPaths, {
-        forceMediaKind: isBookRoot ? "book" : "music",
-        folderCoverArtCache: new Map(),
-        folderCoverArtModifiedCache: new Map(),
-        existingTracksByPath
-      });
+        const collectedTracks: ScannedTrackArtifact[] = [];
+        const isBookRoot = settings.bookRoots.some((bookRoot) => normalizeMediaPath(bookRoot) === normalizeMediaPath(root));
+        const existingTracksByPath = new Map(
+          repository.listTracksInFolder(root).map((track) => [normalizeMediaPath(track.filePath), track] as const)
+        );
+        const changedArtifactFolders = new Set<string>();
+        await scanFolder(root, root, collectedTracks, seenPaths, {
+          forceMediaKind: isBookRoot ? "book" : "music",
+          folderCoverArtCache: new Map(),
+          folderCoverArtModifiedCache: new Map(),
+          existingTracksByPath,
+          changedArtifactFolders
+        });
 
         if (!isBookRoot) {
-          setPhase("finalizing", root, "Updating album artwork and metadata sidecars");
-          await syncLibraryArtifacts({
-            root,
-            tracks: collectedTracks,
-            pushError,
-            discogsAuth
-          });
+          for (const [trackedPath, trackedTrack] of existingTracksByPath.entries()) {
+            if (!seenPaths.has(trackedPath)) {
+              changedArtifactFolders.add(path.resolve(path.dirname(trackedTrack.filePath)));
+            }
+          }
+        }
+
+        if (!isBookRoot) {
+          const artifactTracks = collectedTracks.filter((track) =>
+            changedArtifactFolders.has(path.resolve(path.dirname(track.filePath)))
+          );
+
+          if (artifactTracks.length > 0) {
+            setPhase("finalizing", root, "Updating album artwork and metadata sidecars");
+            await syncLibraryArtifacts({
+              root,
+              tracks: artifactTracks,
+              pushError,
+              discogsAuth
+            });
+          }
         }
       }
 
@@ -505,6 +541,7 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
       const settings = repository.getAppSettings();
       const isBookFolderScan = settings.bookRoots.some((bookRoot) => normalizeMediaPath(bookRoot) === normalizeMediaPath(folderPath));
       const existingFolderTracks = repository.listTracksInFolder(folderPath);
+      const changedArtifactFolders = new Set<string>();
       const existingTracksByPath = new Map(
         existingFolderTracks.map((track) => [normalizeMediaPath(track.filePath), track] as const)
       );
@@ -517,7 +554,8 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
         forceMediaKind: isBookFolderScan ? "book" : "music",
         folderCoverArtCache: new Map(),
         folderCoverArtModifiedCache: new Map(),
-        existingTracksByPath
+        existingTracksByPath,
+        changedArtifactFolders
       });
 
       if (isBookFolderScan) {
@@ -529,13 +567,25 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
       }
 
       if (!isBookFolderScan) {
-        setPhase("finalizing", folderPath, "Updating album artwork and metadata sidecars");
-        await syncLibraryArtifacts({
-          root: folderPath,
-          tracks: collectedTracks,
-          pushError,
-          discogsAuth
-        });
+        for (const [trackedPath, trackedTrack] of existingTracksByPath.entries()) {
+          if (!seenFolderPaths.has(trackedPath)) {
+            changedArtifactFolders.add(path.resolve(path.dirname(trackedTrack.filePath)));
+          }
+        }
+
+        const artifactTracks = collectedTracks.filter((track) =>
+          changedArtifactFolders.has(path.resolve(path.dirname(track.filePath)))
+        );
+
+        if (artifactTracks.length > 0) {
+          setPhase("finalizing", folderPath, "Updating album artwork and metadata sidecars");
+          await syncLibraryArtifacts({
+            root: folderPath,
+            tracks: artifactTracks,
+            pushError,
+            discogsAuth
+          });
+        }
       }
       setPhase("finalizing", folderPath, "Removing missing tracks from the scanned folder");
       repository.pruneMissingTracksInFolder(folderPath, seenFolderPaths);
