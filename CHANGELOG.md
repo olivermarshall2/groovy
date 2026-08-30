@@ -6,6 +6,8 @@ All notable project changes should be recorded here. Keep the newest entry at th
 
 ### Changed
 
+- Moved library settings into a full Settings page route in the web app while keeping the existing button entry point and left navigation layout.
+- Improved web app responsiveness by optimizing album, artist, and book grouping logic, memoizing heavy derived library views, and deferring search filtering work.
 - Added proper ESM JSON import attributes to the server build-info manifest imports so the Docker runtime can start cleanly on Node 22.
 - Fixed the Docker runtime image so the web package manifest is present for the settings build-info endpoint, preventing the production container from crash-looping with `ERR_MODULE_NOT_FOUND`.
 - Added a server-side fallback that derives books from tracked audiobook chapters when the primary books query returns empty, restoring Android book lists, book detail loading, and book offline sync after the mobile-cover-art update.
