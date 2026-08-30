@@ -2,10 +2,19 @@
 
 All notable project changes should be recorded here. Keep the newest entry at the top.
 
+## 0.23.0 - 2026-08-30
+
+### Changed
+
+- Preserved Android audiobook progress and completed status when books are rebuilt from cached tracks or synced offline bundles instead of the server books endpoint.
+- Added a cached-book-detail fallback so opening a book continues to work from local track data when the server briefly returns `Book not found` after a restart or Docker update.
+- Limited expensive offline cover-art refresh work to explicit pull-to-refresh actions so Android startup and routine background refreshes stay faster on the local network.
+
 ## 0.22.0 - 2026-08-30
 
 ### Changed
 
+- Added a Logs tab to the web Settings page with browser-side debug diagnostics for startup, route changes, bootstrap timing, library endpoint timings, and environment details useful for investigating slow application loads.
 - Moved library settings into a full Settings page route in the web app while keeping the existing button entry point and left navigation layout.
 - Improved web app responsiveness by optimizing album, artist, and book grouping logic, memoizing heavy derived library views, and deferring search filtering work.
 - Added proper ESM JSON import attributes to the server build-info manifest imports so the Docker runtime can start cleanly on Node 22.

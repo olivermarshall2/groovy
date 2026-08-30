@@ -158,6 +158,14 @@ type PlaylistDetailRecord = {
   metaLabel: string;
 };
 
+type DebugLogEntry = {
+  id: string;
+  at: string;
+  level: "info" | "warn" | "error";
+  message: string;
+  detail?: string;
+};
+
 type AlbumIdentifyState = {
   albumId: string;
   albumName: string;
@@ -1326,6 +1334,7 @@ const SettingsForm = ({
   scan,
   jobs,
   build,
+  logs,
   busy,
   scanBusy,
   jobsBusy,
@@ -1344,6 +1353,7 @@ const SettingsForm = ({
   scan: AppBootstrap["scan"];
   jobs: AppBootstrap["jobs"];
   build: AppBootstrap["build"];
+  logs: DebugLogEntry[];
   busy: boolean;
   scanBusy: boolean;
   jobsBusy: boolean;
@@ -1372,7 +1382,7 @@ const SettingsForm = ({
   const [showScanDetails, setShowScanDetails] = useState(false);
   const [scanElapsedMs, setScanElapsedMs] = useState(0);
   const [scanTarget, setScanTarget] = useState<"music" | "books" | null>(null);
-  const [activeTab, setActiveTab] = useState<"general" | "folders" | "jobs">("folders");
+  const [activeTab, setActiveTab] = useState<"general" | "folders" | "jobs" | "logs">("folders");
   const mobileCoverJob = jobs.scheduled.find((job) => job.id === "mobile-cover-art") ?? null;
   const [jobElapsedMs, setJobElapsedMs] = useState(0);
 
@@ -1495,10 +1505,11 @@ const SettingsForm = ({
 
     return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   };
-  const tabItems: Array<{ id: "general" | "folders" | "jobs"; label: string }> = [
+  const tabItems: Array<{ id: "general" | "folders" | "jobs" | "logs"; label: string }> = [
     { id: "general", label: "General" },
     { id: "folders", label: "Folders" },
-    { id: "jobs", label: "Jobs" }
+    { id: "jobs", label: "Jobs" },
+    { id: "logs", label: "Logs" }
   ];
 
   return (
@@ -1725,6 +1736,42 @@ const SettingsForm = ({
                   </article>
                 </div>
               ) : null}
+            </div>
+          ) : null}
+
+          {activeTab === "logs" ? (
+            <div className="scan-status-card">
+              <div className="scan-status-row">
+                <strong>Debug log</strong>
+                <button
+                  type="button"
+                  className="pill-button ghost"
+                  onClick={() => {
+                    const text = logs
+                      .map((entry) => `[${new Date(entry.at).toLocaleTimeString()}] ${entry.level.toUpperCase()} ${entry.message}${entry.detail ? `\n${entry.detail}` : ""}`)
+                      .join("\n\n");
+                    void navigator.clipboard.writeText(text);
+                  }}
+                >
+                  Copy log
+                </button>
+              </div>
+              <p className="settings-job-copy">Startup, fetch, route, and browser diagnostics for investigating slow loading.</p>
+              <div className="settings-log-list" role="log" aria-live="polite">
+                {logs.length === 0 ? (
+                  <p className="settings-log-empty">No log entries yet.</p>
+                ) : (
+                  logs.map((entry) => (
+                    <article key={entry.id} className={`settings-log-entry settings-log-entry-${entry.level}`}>
+                      <div className="settings-log-meta">
+                        <strong>{entry.message}</strong>
+                        <span>{new Date(entry.at).toLocaleString()}</span>
+                      </div>
+                      {entry.detail ? <pre>{entry.detail}</pre> : null}
+                    </article>
+                  ))
+                )}
+              </div>
             </div>
           ) : null}
         </section>
@@ -1984,12 +2031,25 @@ export const App = () => {
   const [apiKeyBusy, setApiKeyBusy] = useState(false);
   const [userSettingsBusy, setUserSettingsBusy] = useState(false);
   const [apiKeyCopied, setApiKeyCopied] = useState(false);
+  const [debugLogs, setDebugLogs] = useState<DebugLogEntry[]>([]);
   const [authForm, setAuthForm] = useState({
     name: "",
     email: "",
     password: ""
   });
   const deferredQuery = useDeferredValue(query);
+  const appendDebugLog = (level: DebugLogEntry["level"], message: string, detail?: string) => {
+    setDebugLogs((previous) => [
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        at: new Date().toISOString(),
+        level,
+        message,
+        detail
+      },
+      ...previous
+    ].slice(0, 250));
+  };
   const currentRoute: RouteState = {
     view,
     selectedAlbumId,
@@ -2002,6 +2062,7 @@ export const App = () => {
   };
 
   const syncRouteState = (nextRoute: RouteState) => {
+    appendDebugLog("info", "Route changed", `${currentRoute.view} -> ${nextRoute.view}`);
     startTransition(() => {
       setView(nextRoute.view);
       setSelectedAlbumId(nextRoute.selectedAlbumId);
@@ -2075,31 +2136,51 @@ export const App = () => {
   };
 
   const loadBootstrap = async () => {
-    const nextBootstrap = await fetchBootstrap();
-    setBootstrap({
-      ...nextBootstrap,
-      settings: normalizeAppSettings(nextBootstrap.settings)
-    });
-    setAuthMode(nextBootstrap.hasUsers ? "login" : "register");
-    return {
-      ...nextBootstrap,
-      settings: normalizeAppSettings(nextBootstrap.settings)
-    };
+    const startedAt = performance.now();
+    appendDebugLog("info", "Bootstrap request started", window.location.href);
+
+    try {
+      const nextBootstrap = await fetchBootstrap();
+      const normalizedBootstrap = {
+        ...nextBootstrap,
+        settings: normalizeAppSettings(nextBootstrap.settings)
+      };
+      setBootstrap(normalizedBootstrap);
+      setAuthMode(nextBootstrap.hasUsers ? "login" : "register");
+      appendDebugLog(
+        "info",
+        "Bootstrap request completed",
+        `${Math.round(performance.now() - startedAt)}ms | hasUsers=${String(nextBootstrap.hasUsers)} | currentUser=${nextBootstrap.currentUser?.email ?? "none"} | needsLibrarySetup=${String(nextBootstrap.needsLibrarySetup)}`
+      );
+      return normalizedBootstrap;
+    } catch (error) {
+      appendDebugLog("error", "Bootstrap request failed", error instanceof Error ? error.message : "Unknown bootstrap error");
+      throw error;
+    }
   };
 
   const loadLibrary = async () => {
     setLibraryLoading(true);
+    const startedAt = performance.now();
+    appendDebugLog("info", "Library load started");
 
     try {
+      const timed = async <T,>(label: string, loader: () => Promise<T>) => {
+        const timerStart = performance.now();
+        const result = await loader();
+        appendDebugLog("info", `${label} loaded`, `${Math.round(performance.now() - timerStart)}ms`);
+        return result;
+      };
+
       const [summary, tracks, artists, albums, books, likes, playlists, recent] = await Promise.all([
-        fetchLibrarySummary(),
-        fetchTracks(),
-        fetchArtists(),
-        fetchAlbums(),
-        fetchBooks(),
-        fetchLikedTrackIds(),
-        fetchPlaylists(),
-        fetchRecentlyPlayed()
+        timed("Summary", fetchLibrarySummary),
+        timed("Tracks", fetchTracks),
+        timed("Artists", fetchArtists),
+        timed("Albums", fetchAlbums),
+        timed("Books", fetchBooks),
+        timed("Likes", fetchLikedTrackIds),
+        timed("Playlists", fetchPlaylists),
+        timed("Recently played", fetchRecentlyPlayed)
       ]);
       setData({ summary, tracks, artists, albums, books, playlists: playlists.filter((playlist) => playlist.isSmart) });
       setLikedTrackIds(new Set(likes.trackIds));
@@ -2107,12 +2188,46 @@ export const App = () => {
       setRecentlyPlayed(recent);
       setCurrentTrack((previous) => (previous ? tracks.find((track) => track.id === previous.id) ?? previous : tracks[0] ?? null));
       setPlayQueue((previous) => previous.map((queuedTrack) => tracks.find((track) => track.id === queuedTrack.id) ?? queuedTrack));
+      appendDebugLog(
+        "info",
+        "Library load completed",
+        `${Math.round(performance.now() - startedAt)}ms | tracks=${tracks.length} | albums=${albums.length} | artists=${artists.length} | books=${books.length} | playlists=${playlists.length}`
+      );
+    } catch (error) {
+      appendDebugLog("error", "Library load failed", error instanceof Error ? error.message : "Unknown library load error");
+      throw error;
     } finally {
       setLibraryLoading(false);
     }
   };
 
   useEffect(() => {
+    const navigatorWithExtras = navigator as Navigator & {
+      deviceMemory?: number;
+      connection?: {
+        effectiveType?: string;
+        downlink?: number;
+        rtt?: number;
+        saveData?: boolean;
+      };
+    };
+
+    appendDebugLog(
+      "info",
+      "Browser session started",
+      [
+        `url=${window.location.href}`,
+        `userAgent=${navigator.userAgent}`,
+        `viewport=${window.innerWidth}x${window.innerHeight}`,
+        `cores=${navigator.hardwareConcurrency ?? "unknown"}`,
+        `memory=${navigatorWithExtras.deviceMemory ?? "unknown"}GB`,
+        `network=${navigatorWithExtras.connection?.effectiveType ?? "unknown"}`,
+        `downlink=${navigatorWithExtras.connection?.downlink ?? "unknown"}Mb/s`,
+        `rtt=${navigatorWithExtras.connection?.rtt ?? "unknown"}ms`,
+        `saveData=${String(navigatorWithExtras.connection?.saveData ?? false)}`
+      ].join(" | ")
+    );
+
     const run = async () => {
       setLoading(true);
       setError(null);
@@ -2124,6 +2239,7 @@ export const App = () => {
           await loadLibrary();
         }
       } catch (nextError) {
+        appendDebugLog("error", "Initial application load failed", nextError instanceof Error ? nextError.message : "Failed to load app");
         setError(nextError instanceof Error ? nextError.message : "Failed to load app");
       } finally {
         setLoading(false);
@@ -3975,6 +4091,7 @@ export const App = () => {
                 scan={bootstrap.scan}
                 jobs={bootstrap.jobs}
                 build={bootstrap.build}
+                logs={debugLogs}
                 busy={savingSettings}
                 scanBusy={folderScanBusy}
                 jobsBusy={jobsBusy}
@@ -4268,6 +4385,7 @@ export const App = () => {
                   scan={bootstrap.scan}
                   jobs={bootstrap.jobs}
                   build={bootstrap.build}
+                  logs={debugLogs}
                   busy={savingSettings}
                   scanBusy={folderScanBusy}
                   jobsBusy={jobsBusy}
