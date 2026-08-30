@@ -6,6 +6,7 @@ All notable project changes should be recorded here. Keep the newest entry at th
 
 ### Changed
 
+- Added shared artwork loading placeholders across the web app so hero art and entity cards show a shaped shimmering stand-in while cover images load instead of appearing blank.
 - Reduced web navigation lag between `Books` and `Library` by deferring view-specific group building, limiting large library recomputations to the active screen, and progressively rendering large card grids in batches.
 - Improved the web debug log so routine bootstrap polling no longer floods the log unless the bootstrap state changes or a poll is unusually slow, and added route render timing entries for page-to-page UI performance diagnosis.
 - Split the web app startup path into a faster staged load: bootstrap first, then lightweight library lists, then deferred track-heavy playlists and history data in the background or when track-centric views are opened.

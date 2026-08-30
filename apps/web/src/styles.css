@@ -1521,11 +1521,61 @@ button {
   object-fit: cover;
 }
 
+.art-frame {
+  background: rgba(20, 15, 12, 0.65);
+  overflow: hidden;
+  position: relative;
+}
+
+.art-frame .art-placeholder,
+.art-frame .art-image {
+  height: 100%;
+  width: 100%;
+}
+
+.art-frame .art-placeholder {
+  inset: 0;
+  position: absolute;
+}
+
+.art-frame .art-image {
+  opacity: 0;
+  position: relative;
+  transition: opacity 220ms ease;
+  z-index: 1;
+}
+
+.art-frame.is-loaded .art-image {
+  opacity: 1;
+}
+
+.art-frame.is-loaded .art-placeholder {
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+
 .art-placeholder {
   background:
     linear-gradient(145deg, rgba(214, 150, 87, 0.9), rgba(53, 31, 16, 0.55)),
     linear-gradient(180deg, #1e1712, #120f0d);
   box-shadow: inset 0 0 60px rgba(255, 178, 90, 0.22);
+  overflow: hidden;
+  position: relative;
+}
+
+.art-placeholder::after {
+  animation: art-placeholder-shimmer 1.6s linear infinite;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.12), transparent);
+  content: "";
+  inset: 0;
+  position: absolute;
+  transform: translateX(-100%);
+}
+
+@keyframes art-placeholder-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
 }
 
 .loading-state {

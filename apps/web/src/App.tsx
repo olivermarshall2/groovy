@@ -1045,16 +1045,42 @@ const IncrementalGrid = <T,>({
   );
 };
 
+const CoverArtImage = ({ src, alt }: { src: string | null; alt: string }) => {
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    setLoaded(false);
+  }, [src]);
+
+  if (!src) {
+    return <div className="art-placeholder" aria-label={alt} />;
+  }
+
+  return (
+    <div className={loaded ? "art-frame is-loaded" : "art-frame"}>
+      <div className="art-placeholder" aria-hidden="true" />
+      <img
+        className="art-image"
+        src={src}
+        alt={alt}
+        loading="lazy"
+        onLoad={() => setLoaded(true)}
+        onError={() => setLoaded(true)}
+      />
+    </div>
+  );
+};
+
 const AlbumArt = ({ coverArtId, alt, cacheBuster }: { coverArtId: string | null; alt: string; cacheBuster?: string | number }) => {
   const src = getCoverArtUrl(coverArtId, cacheBuster);
-  return src ? <img className="art-image" src={src} alt={alt} loading="lazy" /> : <div className="art-placeholder" aria-label={alt} />;
+  return <CoverArtImage src={src} alt={alt} />;
 };
 
 const ArtistArt = ({ artist, coverArtId, cacheBuster }: { artist: string; coverArtId: string | null; cacheBuster?: string | number }) => {
   const src = getCoverArtUrl(coverArtId, cacheBuster);
 
   if (src) {
-    return <img className="art-image" src={src} alt={artist} loading="lazy" />;
+    return <CoverArtImage src={src} alt={artist} />;
   }
 
   return (
