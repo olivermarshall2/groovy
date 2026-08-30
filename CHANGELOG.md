@@ -6,6 +6,7 @@ All notable project changes should be recorded here. Keep the newest entry at th
 
 ### Changed
 
+- Fixed the Docker runtime image so the web package manifest is present for the settings build-info endpoint, preventing the production container from crash-looping with `ERR_MODULE_NOT_FOUND`.
 - Added a server-side fallback that derives books from tracked audiobook chapters when the primary books query returns empty, restoring Android book lists, book detail loading, and book offline sync after the mobile-cover-art update.
 - Reworked the web settings dialog into left-side `General`, `Folders`, and `Jobs` tabs with a slightly smaller settings font and a new build-information panel.
 - Added scheduled mobile cover-art job status reporting plus a `Run Now` action with live progress feedback in the web settings UI.

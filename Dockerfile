@@ -44,6 +44,7 @@ COPY --from=build --chown=node:node /app/package.json /app/pnpm-lock.yaml /app/p
 COPY --from=build --chown=node:node /app/node_modules node_modules
 COPY --from=build --chown=node:node /app/apps/server/package.json apps/server/package.json
 COPY --from=build --chown=node:node /app/apps/server/dist apps/server/dist
+COPY --from=build --chown=node:node /app/apps/web/package.json apps/web/package.json
 COPY --from=build --chown=node:node /app/apps/web/dist apps/web/dist
 COPY --from=build --chown=node:node /app/packages/shared/package.json packages/shared/package.json
 COPY --from=build --chown=node:node /app/packages/shared/dist packages/shared/dist
