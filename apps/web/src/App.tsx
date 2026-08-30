@@ -4350,14 +4350,15 @@ export const App = () => {
   const showEntityMetadataOnHeroImage = bootstrap?.settings.showEntityMetadataOnHeroImage ?? false;
   const contentReady = view === "settings" ? !!bootstrap : !!filteredData;
   const canRenderShell = !!bootstrap && !needsAuth && !needsLibrarySetup;
-  const showLibraryAlbumSkeleton = (!filteredData || libraryLoading) && (libraryBrowseMode === "all" ? libraryRecentAlbumPreview.length === 0 : libraryAlbumGroups.length === 0);
-  const showLibraryArtistSkeleton = (!filteredData || libraryLoading) && libraryArtistGroups.length === 0;
-  const showLibraryBookSkeleton = (!filteredData || libraryLoading) && filteredLibraryBookGroups.length === 0;
-  const showLibraryAuthorSkeleton = (!filteredData || libraryLoading) && filteredLibraryAuthorGroups.length === 0;
-  const showAlbumsPageSkeleton = (!filteredData || libraryLoading) && recentAlbums.length === 0;
-  const showArtistsPageSkeleton = (!filteredData || libraryLoading) && artistGroups.length === 0;
-  const showBooksPageSkeleton = (!filteredData || libraryLoading) && bookGroups.length === 0;
-  const showAuthorsPageSkeleton = (!filteredData || libraryLoading) && sortedAuthorGroups.length === 0;
+  const trackBackedListsLoading = !trackHeavyDataLoaded || trackHeavyDataLoading;
+  const showLibraryAlbumSkeleton = (!!bootstrap && (!filteredData || libraryLoading || trackBackedListsLoading)) && (libraryBrowseMode === "all" ? libraryRecentAlbumPreview.length === 0 : libraryAlbumGroups.length === 0);
+  const showLibraryArtistSkeleton = (!!bootstrap && (!filteredData || libraryLoading || trackBackedListsLoading)) && libraryArtistGroups.length === 0;
+  const showLibraryBookSkeleton = (!!bootstrap && (!filteredData || libraryLoading || trackBackedListsLoading)) && filteredLibraryBookGroups.length === 0;
+  const showLibraryAuthorSkeleton = (!!bootstrap && (!filteredData || libraryLoading || trackBackedListsLoading)) && filteredLibraryAuthorGroups.length === 0;
+  const showAlbumsPageSkeleton = (!!bootstrap && (!filteredData || libraryLoading || trackBackedListsLoading)) && recentAlbums.length === 0;
+  const showArtistsPageSkeleton = (!!bootstrap && (!filteredData || libraryLoading || trackBackedListsLoading)) && artistGroups.length === 0;
+  const showBooksPageSkeleton = (!!bootstrap && (!filteredData || libraryLoading || trackBackedListsLoading)) && bookGroups.length === 0;
+  const showAuthorsPageSkeleton = (!!bootstrap && (!filteredData || libraryLoading || trackBackedListsLoading)) && sortedAuthorGroups.length === 0;
 
   useEffect(() => {
     if (loading || libraryLoading || !contentReady) {
