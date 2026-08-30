@@ -1,5 +1,5 @@
+import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   BookmarkCheck,
@@ -101,7 +101,7 @@ import {
 } from "./lib/api.js";
 import groovyBrandIcon from "./assets/groovy-brand-icon.png";
 
-type ViewName = "home" | "search" | "library" | "albums" | "album" | "artists" | "artist" | "authors" | "author" | "books" | "book" | "playlists" | "playlist" | "liked" | "recent" | "recentlyAdded" | "queue";
+type ViewName = "home" | "search" | "library" | "albums" | "album" | "artists" | "artist" | "authors" | "author" | "books" | "book" | "playlists" | "playlist" | "liked" | "recent" | "recentlyAdded" | "queue" | "settings";
 type AuthMode = "register" | "login";
 type LibraryBrowseMode = "all" | "albums" | "artists" | "authors" | "books";
 type RouteState = {
@@ -237,7 +237,7 @@ const mobileNavItems: Array<{ label: string; icon: LucideIcon; id?: ViewName; ac
   { label: "Menu", icon: Menu, action: "menu" }
 ];
 
-const allowedViews: ViewName[] = ["home", "search", "library", "albums", "album", "artists", "artist", "authors", "author", "books", "book", "playlists", "playlist", "liked", "recent", "recentlyAdded", "queue"];
+const allowedViews: ViewName[] = ["home", "search", "library", "albums", "album", "artists", "artist", "authors", "author", "books", "book", "playlists", "playlist", "liked", "recent", "recentlyAdded", "queue", "settings"];
 
 const sanitizeRouteState = (route: RouteState): RouteState => {
   const nextRoute = {
@@ -301,7 +301,7 @@ const parseRouteState = (): RouteState => {
     selectedAuthorId: null,
     selectedPlaylistId: null,
     selectedBookId: null,
-    showSettings: params.get("settings") === "library",
+    showSettings: false,
     showMobileMenu: params.get("mobileMenu") === "1"
   };
 
@@ -347,9 +347,16 @@ const parseRouteState = (): RouteState => {
     case "queue":
       route.view = "queue";
       break;
+    case "settings":
+      route.view = "settings";
+      break;
     default:
       route.view = "home";
       break;
+  }
+
+  if (params.get("settings") === "library") {
+    route.view = "settings";
   }
 
   return sanitizeRouteState(route);
@@ -391,6 +398,8 @@ const buildRoutePath = (route: RouteState) => {
       return "/recent";
     case "queue":
       return "/queue";
+    case "settings":
+      return "/settings";
     default:
       return "/";
   }
@@ -398,10 +407,6 @@ const buildRoutePath = (route: RouteState) => {
 
 const buildRouteUrl = (route: RouteState) => {
   const params = new URLSearchParams();
-
-  if (route.showSettings) {
-    params.set("settings", "library");
-  }
 
   if (route.showMobileMenu) {
     params.set("mobileMenu", "1");
@@ -735,10 +740,21 @@ const renderDetailMeta = (items: Array<string | null | undefined>) =>
       <span key={`item-${index}`} className={index === 0 ? "detail-meta-primary" : undefined}>{item}</span>
     ]);
 
-const buildAlbumGroups = (albums: AlbumRecord[], tracks: TrackRecord[]) =>
-  albums.map<AlbumWithTracks>((album) => {
-    const albumTracks = sortTracksByPlaybackOrder(tracks.filter((track) => track.albumId === album.id));
-    const newestTrack = [...albumTracks].sort((left, right) => right.modifiedAt.localeCompare(left.modifiedAt))[0];
+const buildAlbumGroups = (albums: AlbumRecord[], tracks: TrackRecord[]) => {
+  const tracksByAlbumId = new Map<string, TrackRecord[]>();
+
+  for (const track of tracks) {
+    const existing = tracksByAlbumId.get(track.albumId) ?? [];
+    existing.push(track);
+    tracksByAlbumId.set(track.albumId, existing);
+  }
+
+  return albums.map<AlbumWithTracks>((album) => {
+    const albumTracks = sortTracksByPlaybackOrder(tracksByAlbumId.get(album.id) ?? []);
+    const newestTrack = albumTracks.reduce<TrackRecord | null>(
+      (currentNewest, track) => !currentNewest || track.modifiedAt > currentNewest.modifiedAt ? track : currentNewest,
+      null
+    );
 
     return {
       ...album,
@@ -746,13 +762,34 @@ const buildAlbumGroups = (albums: AlbumRecord[], tracks: TrackRecord[]) =>
       yearLabel: newestTrack ? new Date(newestTrack.modifiedAt).getFullYear().toString() : "----"
     };
   });
+};
 
 const getTrackArtistGroupId = (track: TrackRecord) => track.albumArtistId || track.artistId;
 
-const buildArtistGroups = (artists: ArtistRecord[], albumGroups: AlbumWithTracks[]) =>
-  artists.map<ArtistWithTracks>((artist) => {
-    const artistTracks = albumGroups.flatMap((album) => album.tracks).filter((track) => getTrackArtistGroupId(track) === artist.id);
-    const artistAlbums = albumGroups.filter((album) => album.tracks.some((track) => getTrackArtistGroupId(track) === artist.id));
+const buildArtistGroups = (artists: ArtistRecord[], albumGroups: AlbumWithTracks[]) => {
+  const tracksByArtistId = new Map<string, TrackRecord[]>();
+  const albumsByArtistId = new Map<string, AlbumWithTracks[]>();
+
+  for (const album of albumGroups) {
+    const albumArtistIds = new Set(album.tracks.map((track) => getTrackArtistGroupId(track)).filter(Boolean));
+
+    for (const track of album.tracks) {
+      const artistId = getTrackArtistGroupId(track);
+      const existingTracks = tracksByArtistId.get(artistId) ?? [];
+      existingTracks.push(track);
+      tracksByArtistId.set(artistId, existingTracks);
+    }
+
+    for (const artistId of albumArtistIds) {
+      const existingAlbums = albumsByArtistId.get(artistId) ?? [];
+      existingAlbums.push(album);
+      albumsByArtistId.set(artistId, existingAlbums);
+    }
+  }
+
+  return artists.map<ArtistWithTracks>((artist) => {
+    const artistTracks = tracksByArtistId.get(artist.id) ?? [];
+    const artistAlbums = albumsByArtistId.get(artist.id) ?? [];
 
     return {
       ...artist,
@@ -761,6 +798,7 @@ const buildArtistGroups = (artists: ArtistRecord[], albumGroups: AlbumWithTracks
       durationSeconds: artistTracks.reduce((total, track) => total + (track.durationSeconds ?? 0), 0)
     };
   });
+};
 
 const getArtistListCoverArtId = (artist: ArtistWithTracks) =>
   artist.albums.find((album) => album.coverArtId)?.coverArtId ?? artist.tracks.find((track) => track.coverArtId)?.coverArtId ?? null;
@@ -781,9 +819,21 @@ const getBookCardResumeLabel = (book: BookWithTracks) => {
 const getBookDisplayAuthor = (book: Pick<BookRecord, "author">, tracks: TrackRecord[]) =>
   tracks.find((track) => track.bookId && track.artist)?.artist ?? tracks.find((track) => track.artist)?.artist ?? book.author;
 
-const buildBookGroups = (books: BookRecord[], tracks: TrackRecord[]) =>
-  books.map<BookWithTracks>((book) => {
-    const bookTracks = sortTracksByPlaybackOrder(tracks.filter((track) => track.bookId === book.id));
+const buildBookGroups = (books: BookRecord[], tracks: TrackRecord[]) => {
+  const tracksByBookId = new Map<string, TrackRecord[]>();
+
+  for (const track of tracks) {
+    if (!track.bookId) {
+      continue;
+    }
+
+    const existing = tracksByBookId.get(track.bookId) ?? [];
+    existing.push(track);
+    tracksByBookId.set(track.bookId, existing);
+  }
+
+  return books.map<BookWithTracks>((book) => {
+    const bookTracks = sortTracksByPlaybackOrder(tracksByBookId.get(book.id) ?? []);
 
     return {
       ...book,
@@ -791,6 +841,7 @@ const buildBookGroups = (books: BookRecord[], tracks: TrackRecord[]) =>
       tracks: bookTracks
     };
   });
+};
 
 const createAuthorId = (name: string) => `author:${name.trim().toLowerCase()}`;
 
@@ -1286,7 +1337,8 @@ const SettingsForm = ({
   onClose,
   title,
   description,
-  actionLabel
+  actionLabel,
+  pageMode = false
 }: {
   initialSettings: AppSettings;
   scan: AppBootstrap["scan"];
@@ -1304,6 +1356,7 @@ const SettingsForm = ({
   title: string;
   description: string;
   actionLabel: string;
+  pageMode?: boolean;
 }) => {
   const initialLibraryRoot = initialSettings.libraryRoots[0] ?? "";
   const initialBookRoot = initialSettings.bookRoots[0] ?? "";
@@ -1450,20 +1503,22 @@ const SettingsForm = ({
 
   return (
     <form
-      className="auth-form settings-shell"
+      className={pageMode ? "auth-form settings-shell settings-page-form" : "auth-form settings-shell"}
       onSubmit={async (event) => {
         event.preventDefault();
         await onSubmit(buildSettingsPayload());
       }}
     >
-      <div className="dialog-header">
+      <div className={pageMode ? "dialog-header settings-page-header" : "dialog-header"}>
         <div className="modal-copy">
           <h2>{title}</h2>
           <p>{description}</p>
         </div>
-        <button type="button" className="close-button" onClick={handleClose} aria-label="Close library settings">
-          <X className="h-4 w-4" />
-        </button>
+        {pageMode ? null : (
+          <button type="button" className="close-button" onClick={handleClose} aria-label="Close library settings">
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
       {error ? <p className="error-banner">{error}</p> : null}
       <div className="settings-layout">
@@ -1934,6 +1989,7 @@ export const App = () => {
     email: "",
     password: ""
   });
+  const deferredQuery = useDeferredValue(query);
   const currentRoute: RouteState = {
     view,
     selectedAlbumId,
@@ -1946,14 +2002,16 @@ export const App = () => {
   };
 
   const syncRouteState = (nextRoute: RouteState) => {
-    setView(nextRoute.view);
-    setSelectedAlbumId(nextRoute.selectedAlbumId);
-    setSelectedArtistId(nextRoute.selectedArtistId);
-    setSelectedAuthorId(nextRoute.selectedAuthorId);
-    setSelectedPlaylistId(nextRoute.selectedPlaylistId);
-    setSelectedBookId(nextRoute.selectedBookId);
-    setShowSettings(nextRoute.showSettings);
-    setShowMobileMenu(nextRoute.showMobileMenu);
+    startTransition(() => {
+      setView(nextRoute.view);
+      setSelectedAlbumId(nextRoute.selectedAlbumId);
+      setSelectedArtistId(nextRoute.selectedArtistId);
+      setSelectedAuthorId(nextRoute.selectedAuthorId);
+      setSelectedPlaylistId(nextRoute.selectedPlaylistId);
+      setSelectedBookId(nextRoute.selectedBookId);
+      setShowSettings(nextRoute.showSettings);
+      setShowMobileMenu(nextRoute.showMobileMenu);
+    });
   };
 
   const applyRouteState = (nextRoute: RouteState, historyMode: "push" | "replace" | "none" = "push") => {
@@ -2334,7 +2392,7 @@ export const App = () => {
       return null;
     }
 
-    const search = query.trim().toLowerCase();
+    const search = deferredQuery.trim().toLowerCase();
 
     if (!search) {
       const albumGroups = buildAlbumGroups(data.albums, data.tracks);
@@ -2381,39 +2439,39 @@ export const App = () => {
       bookGroups,
       playlists
     };
-  }, [data, query]);
+  }, [data, deferredQuery]);
 
   const featuredAlbum = filteredData?.albumGroups[0] ?? null;
-  const recentAlbums = filteredData?.albumGroups.slice(0, 5) ?? [];
-  const savedEarlierAlbums = filteredData?.albumGroups.slice(5, 10) ?? [];
-  const trendingArtists = filteredData?.artists.slice(0, 4) ?? [];
-  const artistGroups = filteredData?.artistGroups ?? [];
-  const bookGroups = filteredData?.bookGroups ?? [];
-  const searchAlbums = filteredData?.albumGroups.slice(0, 8) ?? [];
-  const searchBooks = filteredData?.bookGroups.slice(0, 8) ?? [];
-  const searchArtists = filteredData?.artistGroups.slice(0, 8) ?? [];
-  const searchTracks = filteredData?.tracks.slice(0, 20) ?? [];
+  const recentAlbums = useMemo(() => filteredData?.albumGroups.slice(0, 5) ?? [], [filteredData]);
+  const savedEarlierAlbums = useMemo(() => filteredData?.albumGroups.slice(5, 10) ?? [], [filteredData]);
+  const trendingArtists = useMemo(() => filteredData?.artists.slice(0, 4) ?? [], [filteredData]);
+  const artistGroups = useMemo(() => filteredData?.artistGroups ?? [], [filteredData]);
+  const bookGroups = useMemo(() => filteredData?.bookGroups ?? [], [filteredData]);
+  const searchAlbums = useMemo(() => filteredData?.albumGroups.slice(0, 8) ?? [], [filteredData]);
+  const searchBooks = useMemo(() => filteredData?.bookGroups.slice(0, 8) ?? [], [filteredData]);
+  const searchArtists = useMemo(() => filteredData?.artistGroups.slice(0, 8) ?? [], [filteredData]);
+  const searchTracks = useMemo(() => filteredData?.tracks.slice(0, 20) ?? [], [filteredData]);
   const currentTrackArtist = currentTrack?.artist ?? "Choose a track to begin playback";
   const mobileCurrentTrackArtist = truncateLabel(currentTrackArtist, 35);
   const currentTrackAlbum = currentTrack?.album ?? "Unknown album";
   const mobileCurrentTrackAlbum = truncateLabel(currentTrackAlbum, 35);
-  const playlists = filteredData?.playlists ?? [];
-  const libraryItems = filteredData?.tracks.slice(0, 12) ?? [];
-  const activeAlbumGroup = filteredData?.albumGroups.find((album) => album.id === selectedAlbumId) ?? null;
+  const playlists = useMemo(() => filteredData?.playlists ?? [], [filteredData]);
+  const libraryItems = useMemo(() => filteredData?.tracks.slice(0, 12) ?? [], [filteredData]);
+  const activeAlbumGroup = useMemo(() => filteredData?.albumGroups.find((album) => album.id === selectedAlbumId) ?? null, [filteredData, selectedAlbumId]);
   const activeAlbum = selectedAlbumDetail?.album ?? activeAlbumGroup ?? null;
   const activeAlbumTracks = selectedAlbumDetail?.tracks ?? (activeAlbumGroup ? sortTracksByPlaybackOrder(activeAlbumGroup.tracks) : []);
   const activeAlbumBlurb =
     selectedAlbumDetail?.outline || selectedAlbumDetail?.review || selectedAlbumDetail?.artistOutline || selectedAlbumDetail?.artistBiography;
-  const activeArtistGroup = filteredData?.artistGroups.find((artist) => artist.id === selectedArtistId) ?? null;
+  const activeArtistGroup = useMemo(() => filteredData?.artistGroups.find((artist) => artist.id === selectedArtistId) ?? null, [filteredData, selectedArtistId]);
   const activeArtistTracks = activeArtistGroup ? sortTracksByPlaybackOrder(activeArtistGroup.tracks) : [];
   const activeArtistAlbums = activeArtistGroup?.albums ?? [];
   const activeArtistCoverArtId = activeArtistAlbums[0]?.coverArtId ?? activeArtistTracks[0]?.coverArtId ?? null;
   const authorGroups = useMemo(() => buildAuthorGroups(bookGroups), [bookGroups]);
-  const activeAuthorGroup = authorGroups.find((author) => author.id === selectedAuthorId) ?? null;
+  const activeAuthorGroup = useMemo(() => authorGroups.find((author) => author.id === selectedAuthorId) ?? null, [authorGroups, selectedAuthorId]);
   const activeAuthorBooks = activeAuthorGroup?.books ?? [];
   const activeAuthorTracks = activeAuthorGroup?.tracks ?? [];
   const activeAuthorCoverArtId = activeAuthorGroup ? getAuthorListCoverArtId(activeAuthorGroup, filteredData?.summary.lastScanAt ?? null) : null;
-  const activeBookGroup = filteredData?.bookGroups.find((book) => book.id === selectedBookId) ?? null;
+  const activeBookGroup = useMemo(() => filteredData?.bookGroups.find((book) => book.id === selectedBookId) ?? null, [filteredData, selectedBookId]);
   const activeBookTracks = selectedBookDetail?.tracks ?? activeBookGroup?.tracks ?? [];
   const activeBook =
     selectedBookDetail?.book || activeBookGroup
@@ -2522,24 +2580,39 @@ export const App = () => {
   const libraryTracksFiltered = filteredData?.tracks.filter(genreMatches) ?? [];
   const libraryMusicTracksFiltered = libraryTracksFiltered.filter((track) => track.mediaKind !== "book");
   const libraryBookTracksFiltered = libraryTracksFiltered.filter((track) => track.mediaKind === "book");
-  const libraryAlbumGroups = filteredData
-    ? buildAlbumGroups(
-        filteredData.albums.filter((album) => libraryMusicTracksFiltered.some((track) => track.albumId === album.id)),
-        libraryMusicTracksFiltered
-      ).filter((album) => album.tracks.length > 0)
-    : [];
-  const libraryArtistGroups = filteredData
-    ? buildArtistGroups(
-        filteredData.artists.filter((artist) => libraryMusicTracksFiltered.some((track) => getTrackArtistGroupId(track) === artist.id)),
-        libraryAlbumGroups
-      ).filter((artist) => artist.tracks.length > 0)
-    : [];
-  const libraryBookGroups = filteredData
-    ? buildBookGroups(
-        filteredData.books.filter((book) => libraryBookTracksFiltered.some((track) => track.bookId === book.id)),
-        libraryBookTracksFiltered
-      ).filter((book) => book.tracks.length > 0)
-    : [];
+  const libraryAlbumGroups = useMemo(() => {
+    if (!filteredData) {
+      return [];
+    }
+
+    const albumIds = new Set(libraryMusicTracksFiltered.map((track) => track.albumId));
+    return buildAlbumGroups(
+      filteredData.albums.filter((album) => albumIds.has(album.id)),
+      libraryMusicTracksFiltered
+    ).filter((album) => album.tracks.length > 0);
+  }, [filteredData, libraryMusicTracksFiltered]);
+  const libraryArtistGroups = useMemo(() => {
+    if (!filteredData) {
+      return [];
+    }
+
+    const artistIds = new Set(libraryMusicTracksFiltered.map((track) => getTrackArtistGroupId(track)));
+    return buildArtistGroups(
+      filteredData.artists.filter((artist) => artistIds.has(artist.id)),
+      libraryAlbumGroups
+    ).filter((artist) => artist.tracks.length > 0);
+  }, [filteredData, libraryAlbumGroups, libraryMusicTracksFiltered]);
+  const libraryBookGroups = useMemo(() => {
+    if (!filteredData) {
+      return [];
+    }
+
+    const bookIds = new Set(libraryBookTracksFiltered.map((track) => track.bookId).filter(Boolean));
+    return buildBookGroups(
+      filteredData.books.filter((book) => bookIds.has(book.id)),
+      libraryBookTracksFiltered
+    ).filter((book) => book.tracks.length > 0);
+  }, [filteredData, libraryBookTracksFiltered]);
   const sortAuthorGroups = (authors: AuthorWithBooks[]) => {
     if (libraryAuthorsSort === "book-count") {
       return [...authors].sort((left, right) => {
@@ -2661,30 +2734,30 @@ export const App = () => {
 
     return visibleBooks;
   }, [libraryBookGroups, libraryBooksSort, showCachedBooks, showCompletedBooks, showInProgressBooks]);
-  const libraryRecentAlbumGroups = [...libraryAlbumGroups].sort((left, right) => {
+  const libraryRecentAlbumGroups = useMemo(() => [...libraryAlbumGroups].sort((left, right) => {
     const leftModifiedAt = left.tracks[0]?.modifiedAt ?? "";
     const rightModifiedAt = right.tracks[0]?.modifiedAt ?? "";
     return rightModifiedAt.localeCompare(leftModifiedAt);
-  });
-  const libraryRecentAlbumPreview = libraryRecentAlbumGroups.slice(0, 4);
-  const recentlyAddedArtists = [...libraryArtistGroups].sort((left, right) => {
+  }), [libraryAlbumGroups]);
+  const libraryRecentAlbumPreview = useMemo(() => libraryRecentAlbumGroups.slice(0, 4), [libraryRecentAlbumGroups]);
+  const recentlyAddedArtists = useMemo(() => [...libraryArtistGroups].sort((left, right) => {
     const leftModifiedAt = [...left.tracks].sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt))[0]?.modifiedAt ?? "";
     const rightModifiedAt = [...right.tracks].sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt))[0]?.modifiedAt ?? "";
     return rightModifiedAt.localeCompare(leftModifiedAt);
-  });
-  const recentlyAddedTracks = [...libraryTracksFiltered].sort((left, right) => right.modifiedAt.localeCompare(left.modifiedAt)).slice(0, 40);
-  const libraryUserPlaylists = userPlaylists
+  }), [libraryArtistGroups]);
+  const recentlyAddedTracks = useMemo(() => [...libraryTracksFiltered].sort((left, right) => right.modifiedAt.localeCompare(left.modifiedAt)).slice(0, 40), [libraryTracksFiltered]);
+  const libraryUserPlaylists = useMemo(() => userPlaylists
     .map((playlist) => ({
       ...playlist,
       tracks: playlist.tracks.filter(genreMatches)
     }))
-    .filter((playlist) => playlist.tracks.length > 0);
-  const librarySmartPlaylists = playlists
+    .filter((playlist) => playlist.tracks.length > 0), [userPlaylists, selectedGenreFilter, filteredData]);
+  const librarySmartPlaylists = useMemo(() => playlists
     .map((playlist) => ({
       ...playlist,
       tracks: playlist.tracks.filter(genreMatches)
     }))
-    .filter((playlist) => playlist.tracks.length > 0);
+    .filter((playlist) => playlist.tracks.length > 0), [playlists, selectedGenreFilter, filteredData]);
   const playlistDetailRecords = useMemo<PlaylistDetailRecord[]>(() => {
     const personalPlaylists = userPlaylists.map((playlist) => ({
       id: playlist.id,
@@ -3463,11 +3536,14 @@ export const App = () => {
   const handleSettingsSave = async (settings: AppSettings) => {
     setSavingSettings(true);
     setError(null);
+    const isSetupFlow = bootstrap?.needsLibrarySetup ?? false;
 
     try {
       const response = await updateSettings(settings);
       setDismissSetupModal(true);
-      updateRoute({ showSettings: false }, { replace: true });
+      if (isSetupFlow) {
+        navigateToView("home");
+      }
       setBootstrap((previous) =>
         previous
           ? {
@@ -3505,10 +3581,7 @@ export const App = () => {
   };
 
   const openLibrarySettings = () => {
-    updateRoute({
-      showMobileMenu: false,
-      showSettings: true
-    });
+    navigateToView("settings");
   };
 
   const openCurrentUserSettings = async () => {
@@ -3853,9 +3926,10 @@ export const App = () => {
   const currentUser = bootstrap?.currentUser ?? null;
   const needsAuth = !loading && bootstrap && !currentUser;
   const needsLibrarySetup = !!currentUser && !!bootstrap?.needsLibrarySetup;
-  const shouldShowBlockingSetup = !!bootstrap && (needsAuth || showSettings || (needsLibrarySetup && !dismissSetupModal));
+  const shouldShowBlockingSetup = !!bootstrap && (needsAuth || (needsLibrarySetup && !dismissSetupModal));
   const scanActive = bootstrap?.scan.isScanning ?? false;
   const showEntityMetadataOnHeroImage = bootstrap?.settings.showEntityMetadataOnHeroImage ?? false;
+  const contentReady = view === "settings" ? !!bootstrap : !!filteredData;
 
   return (
     <div className="app-shell">
@@ -3911,15 +3985,11 @@ export const App = () => {
                 onRunMobileCoverJobNow={handleRunMobileCoverJobNow}
                 onClose={() => {
                   setError(null);
-                  updateRoute({ showSettings: false }, { replace: true });
+                  navigateToView("home");
                 }}
-                title={showSettings ? "Update library root" : "Choose your music folder"}
-                description={
-                  showSettings
-                    ? "Change the root folders for your music and books, then run scans manually when you want to refresh them."
-                    : "Point the app at the root of your MP3 and FLAC collection, then use the scan buttons to build the local index."
-                }
-                actionLabel={showSettings ? "Save folder settings" : "Save settings"}
+                title="Choose your music folder"
+                description="Point the app at the root of your MP3 and FLAC collection, then use the scan buttons to build the local index."
+                actionLabel="Save settings"
               />
             )}
           </div>
@@ -4112,7 +4182,7 @@ export const App = () => {
           <div className="topbar-actions">
             <button className="pill-button ghost settings-link flex items-center gap-2" onClick={openLibrarySettings}>
               <Settings className="h-4 w-4" />
-              Library settings
+              Settings
               {scanActive ? <span className="scan-spinner" aria-label="Scanning library" /> : null}
             </button>
             <button className="avatar-button" onClick={() => void openCurrentUserSettings()} aria-label="Open user settings">
@@ -4146,8 +4216,8 @@ export const App = () => {
             </button>
             <button className="mobile-overflow-item" onClick={openLibrarySettings}>
               <div>
-                <strong>Library settings</strong>
-                <span>Music folder, book folder, and scan setup</span>
+                <strong>Settings</strong>
+                <span>Folders, scans, jobs, and build information</span>
               </div>
               <Settings className="h-4 w-4" />
             </button>
@@ -4169,8 +4239,7 @@ export const App = () => {
               onClick={() => {
                 if (item.action === "menu") {
                   updateRoute({
-                    showMobileMenu: !showMobileMenu,
-                    showSettings: showMobileMenu ? showSettings : false
+                    showMobileMenu: !showMobileMenu
                   });
                   return;
                 }
@@ -4184,14 +4253,38 @@ export const App = () => {
           ))}
         </nav>
 
-        {loading || libraryLoading || (!filteredData && !needsAuth && !needsLibrarySetup) ? (
+        {loading || libraryLoading || (!contentReady && !needsAuth && !needsLibrarySetup) ? (
           <section className="loading-state">{loading ? "Loading application..." : "Loading your indexed library..."}</section>
         ) : null}
 
         {error && !needsAuth && !needsLibrarySetup ? <p className="error-banner inline">{error}</p> : null}
 
-        {!loading && filteredData ? (
+        {!loading && contentReady ? (
           <div className="content-scroll">
+            {view === "settings" && bootstrap ? (
+              <section className="settings-page">
+                <SettingsForm
+                  initialSettings={bootstrap.settings}
+                  scan={bootstrap.scan}
+                  jobs={bootstrap.jobs}
+                  build={bootstrap.build}
+                  busy={savingSettings}
+                  scanBusy={folderScanBusy}
+                  jobsBusy={jobsBusy}
+                  error={error}
+                  onSubmit={handleSettingsSave}
+                  onScanLibraryRoot={handleFolderScan}
+                  onScanBookRoot={handleFolderScan}
+                  onRunMobileCoverJobNow={handleRunMobileCoverJobNow}
+                  onClose={() => navigateToView("home")}
+                  title="Settings"
+                  description="Manage folders, scan behavior, scheduled jobs, and running build information."
+                  actionLabel="Save settings"
+                  pageMode
+                />
+              </section>
+            ) : null}
+
             {view === "home" ? (
               <>
                 <section className="hero-card">
@@ -4226,7 +4319,7 @@ export const App = () => {
                 <section className="content-section">
                   <div className="section-header">
                     <h2>New Releases</h2>
-                    <span>{filteredData.summary.trackCount} indexed tracks</span>
+                    <span>{filteredData!.summary.trackCount} indexed tracks</span>
                   </div>
                   <div className="album-grid compact">
                     {recentAlbums.map((album) => (
@@ -4922,7 +5015,7 @@ export const App = () => {
                 <section className="page-heading">
                   <div>
                     <h1>Your Albums</h1>
-                    <p>{filteredData.albums.length} albums saved</p>
+                    <p>{filteredData!.albums.length} albums saved</p>
                   </div>
                 </section>
 
@@ -5336,12 +5429,12 @@ export const App = () => {
                 </section>
                 <section className="content-section">
                   <TrackList
-                    tracks={filteredData.tracks.filter((track) => likedTrackIds.has(track.id))}
+                    tracks={filteredData!.tracks.filter((track) => likedTrackIds.has(track.id))}
                     currentTrackId={currentTrack?.id ?? null}
                     likedTrackIds={likedTrackIds}
                     isCurrentTrackPlaying={isPlaying}
                     onPlayTrack={(track) => {
-                      const likedTracks = filteredData.tracks.filter((item) => likedTrackIds.has(item.id));
+                      const likedTracks = filteredData!.tracks.filter((item) => likedTrackIds.has(item.id));
                       void playTracks(likedTracks, "Liked Songs", likedTracks.findIndex((item) => item.id === track.id));
                     }}
                     onEditTags={openTrackTagsEditor}

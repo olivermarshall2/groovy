@@ -1598,6 +1598,20 @@ button {
   font-size: 0.9375rem;
 }
 
+.settings-page {
+  display: grid;
+  width: 100%;
+}
+
+.settings-page-form {
+  align-content: start;
+  width: 100%;
+}
+
+.settings-page-header {
+  align-items: flex-start;
+}
+
 .settings-layout {
   display: grid;
   gap: 1rem;
