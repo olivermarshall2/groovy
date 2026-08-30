@@ -6,6 +6,7 @@ All notable project changes should be recorded here. Keep the newest entry at th
 
 ### Changed
 
+- Fixed the web artwork loading placeholders so the new shared cover frame inherits the correct size and aspect rules across Books, Library, Artists, playlists, track rows, and detail heroes instead of only showing reliably on the Home page.
 - Added shared artwork loading placeholders across the web app so hero art and entity cards show a shaped shimmering stand-in while cover images load instead of appearing blank.
 - Reduced web navigation lag between `Books` and `Library` by deferring view-specific group building, limiting large library recomputations to the active screen, and progressively rendering large card grids in batches.
 - Improved the web debug log so routine bootstrap polling no longer floods the log unless the bootstrap state changes or a poll is unusually slow, and added route render timing entries for page-to-page UI performance diagnosis.

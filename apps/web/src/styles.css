@@ -557,6 +557,9 @@ button {
   z-index: 1;
 }
 
+.hero-art .art-frame,
+.hero-art .art-frame .art-image,
+.hero-art .art-frame .art-placeholder,
 .hero-art img,
 .hero-art .art-placeholder {
   border-radius: 20px;
@@ -597,6 +600,7 @@ button {
   width: 100%;
 }
 
+.album-detail-art .art-frame,
 .album-detail-art .art-image,
 .album-detail-art .art-placeholder {
   border-radius: 20px;
@@ -659,6 +663,7 @@ button {
   position: relative;
 }
 
+.entity-list-art:not(.entity-list-art-plain) .art-frame,
 .entity-list-art:not(.entity-list-art-plain) .art-image,
 .entity-list-art:not(.entity-list-art-plain) .art-placeholder {
   filter: saturate(0.86) brightness(0.62);
@@ -1034,6 +1039,7 @@ button {
   line-height: 1.15;
 }
 
+.album-card .art-frame,
 .album-card .art-image,
 .album-card .art-placeholder {
   aspect-ratio: 1 / 1;
@@ -1041,6 +1047,7 @@ button {
   width: 100%;
 }
 
+.album-card.wide .art-frame,
 .album-card.wide .art-image,
 .album-card.wide .art-placeholder {
   aspect-ratio: 1.08 / 1;
@@ -1105,6 +1112,7 @@ button {
   padding: 0;
 }
 
+.artist-spotlight-art .art-frame,
 .artist-spotlight-art .art-image,
 .artist-spotlight-art .art-placeholder,
 .artist-spotlight-art .artist-detail-fallback {
@@ -1134,6 +1142,7 @@ button {
   padding: 0.35rem 0.65rem;
 }
 
+.playlist-card .art-frame,
 .playlist-card .art-image,
 .playlist-card .art-placeholder {
   aspect-ratio: 1 / 1;
@@ -1167,6 +1176,7 @@ button {
   text-align: left;
 }
 
+.feature-strip .art-frame,
 .feature-strip .art-image,
 .feature-strip .art-placeholder {
   aspect-ratio: 1.3 / 1;
@@ -1370,6 +1380,7 @@ button {
   width: 96px;
 }
 
+.queue-now-playing-art .art-frame,
 .queue-now-playing-art .art-image,
 .queue-now-playing-art .art-placeholder {
   border-radius: 1rem;
@@ -1507,8 +1518,10 @@ button {
   grid-template-columns: 46px minmax(0, 1fr);
 }
 
+.track-main .art-frame,
 .track-main .art-image,
 .track-main .art-placeholder,
+.now-playing .art-frame,
 .now-playing .art-image,
 .now-playing .art-placeholder {
   border-radius: 12px;
