@@ -6,6 +6,9 @@ All notable project changes should be recorded here. Keep the newest entry at th
 
 ### Changed
 
+- Split the web app startup path into a faster staged load: bootstrap first, then lightweight library lists, then deferred track-heavy playlists and history data in the background or when track-centric views are opened.
+- Fixed the Settings log viewer so the `Copy log` action works on non-secure LAN origins with a clipboard fallback, and the plain-text log pane can be selected directly for manual copy.
+- Stopped the scheduled mobile cover-art job from auto-running after Docker restarts or updates when the server starts after the scheduled time, while keeping manual `Run Now` support intact.
 - Added a stronger Android last-good-library snapshot for books and tracks so non-offline books remain visible from cache when a refresh fully fails during temporary server/network outages.
 - Reused the cached track snapshot when opening book detail, allowing non-offline books to open from cached chapters even if the live track refresh is unavailable.
 - Kept the cached library snapshot in sync during playlist and like updates so later lightweight writes do not accidentally discard cached book visibility after a failed refresh.

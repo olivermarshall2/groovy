@@ -496,6 +496,35 @@ const formatTrackTime = (seconds: number | null) => {
   return `${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
 };
 
+const copyTextToClipboard = async (value: string) => {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      // Fall back for non-secure origins and browsers that reject the async clipboard API.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.top = "-9999px";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    document.body.removeChild(textarea);
+  }
+};
+
 const truncateLabel = (value: string, limit: number) => (value.length > limit ? `${value.slice(0, Math.max(0, limit - 1)).trimEnd()}…` : value);
 
 const formatBookPositionLabel = (track: TrackRecord | null | undefined, positionSeconds: number | null | undefined) => {
@@ -949,6 +978,8 @@ const buildPlaylists = (tracks: TrackRecord[], albums: AlbumWithTracks[], artist
   ].filter((playlist) => playlist.tracks.length > 0);
 };
 
+const isTrackHeavyView = (view: ViewName) => ["search", "artist", "author", "liked", "recent", "recentlyAdded", "playlists", "playlist", "queue"].includes(view);
+
 const AlbumArt = ({ coverArtId, alt, cacheBuster }: { coverArtId: string | null; alt: string; cacheBuster?: string | number }) => {
   const src = getCoverArtUrl(coverArtId, cacheBuster);
   return src ? <img className="art-image" src={src} alt={alt} loading="lazy" /> : <div className="art-placeholder" aria-label={alt} />;
@@ -1384,6 +1415,7 @@ const SettingsForm = ({
   const [scanElapsedMs, setScanElapsedMs] = useState(0);
   const [scanTarget, setScanTarget] = useState<"music" | "books" | null>(null);
   const [activeTab, setActiveTab] = useState<"general" | "folders" | "jobs" | "logs">("folders");
+  const [copyLogState, setCopyLogState] = useState<"idle" | "copied" | "failed">("idle");
   const mobileCoverJob = jobs.scheduled.find((job) => job.id === "mobile-cover-art") ?? null;
   const [jobElapsedMs, setJobElapsedMs] = useState(0);
 
@@ -1400,6 +1432,15 @@ const SettingsForm = ({
       setScanTarget(null);
     }
   }, [scanBusy]);
+
+  useEffect(() => {
+    if (copyLogState === "idle") {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => setCopyLogState("idle"), 2000);
+    return () => window.clearTimeout(timeoutId);
+  }, [copyLogState]);
 
   useEffect(() => {
     if (!mobileCoverJob?.isRunning || !mobileCoverJob.lastStartedAt) {
@@ -1512,6 +1553,9 @@ const SettingsForm = ({
     { id: "jobs", label: "Jobs", icon: Clock3 },
     { id: "logs", label: "Logs", icon: Logs }
   ];
+  const logText = logs
+    .map((entry) => `[${new Date(entry.at).toLocaleString()}] ${entry.level.toUpperCase()} ${entry.message}${entry.detail ? `\n${entry.detail}` : ""}`)
+    .join("\n\n");
 
   return (
     <form
@@ -1753,25 +1797,21 @@ const SettingsForm = ({
                   type="button"
                   className="pill-button ghost"
                   onClick={() => {
-                    const text = logs
-                      .map((entry) => `[${new Date(entry.at).toLocaleTimeString()}] ${entry.level.toUpperCase()} ${entry.message}${entry.detail ? `\n${entry.detail}` : ""}`)
-                      .join("\n\n");
-                    void navigator.clipboard.writeText(text);
+                    void (async () => {
+                      const copied = await copyTextToClipboard(logText);
+                      setCopyLogState(copied ? "copied" : "failed");
+                    })();
                   }}
                 >
-                  Copy log
+                  {copyLogState === "copied" ? "Copied" : copyLogState === "failed" ? "Press Ctrl+C" : "Copy log"}
                 </button>
               </div>
               <p className="settings-job-copy">Startup, fetch, route, and browser diagnostics for investigating slow loading.</p>
-              <div className="settings-log-list" role="log" aria-live="polite">
+              <div className="settings-log-list" role="log" aria-live="polite" tabIndex={0}>
                 {logs.length === 0 ? (
                   <p className="settings-log-empty">No log entries yet.</p>
                 ) : (
-                  <pre className="settings-log-plain">
-                    {logs
-                      .map((entry) => `[${new Date(entry.at).toLocaleString()}] ${entry.level.toUpperCase()} ${entry.message}${entry.detail ? `\n${entry.detail}` : ""}`)
-                      .join("\n\n")}
-                  </pre>
+                  <pre className="settings-log-plain">{logText}</pre>
                 )}
               </div>
             </div>
@@ -2034,6 +2074,8 @@ export const App = () => {
   const [userSettingsBusy, setUserSettingsBusy] = useState(false);
   const [apiKeyCopied, setApiKeyCopied] = useState(false);
   const [debugLogs, setDebugLogs] = useState<DebugLogEntry[]>([]);
+  const [trackHeavyDataLoaded, setTrackHeavyDataLoaded] = useState(false);
+  const [trackHeavyDataLoading, setTrackHeavyDataLoading] = useState(false);
   const [authForm, setAuthForm] = useState({
     name: "",
     email: "",
@@ -2164,7 +2206,7 @@ export const App = () => {
   const loadLibrary = async () => {
     setLibraryLoading(true);
     const startedAt = performance.now();
-    appendDebugLog("info", "Library load started");
+    appendDebugLog("info", "Library shell load started");
 
     try {
       const timed = async <T,>(label: string, loader: () => Promise<T>) => {
@@ -2174,33 +2216,90 @@ export const App = () => {
         return result;
       };
 
-      const [summary, tracks, artists, albums, books, likes, playlists, recent] = await Promise.all([
+      const [summary, artists, albums, books, likes] = await Promise.all([
         timed("Summary", fetchLibrarySummary),
-        timed("Tracks", fetchTracks),
         timed("Artists", fetchArtists),
         timed("Albums", fetchAlbums),
         timed("Books", fetchBooks),
-        timed("Likes", fetchLikedTrackIds),
-        timed("Playlists", fetchPlaylists),
-        timed("Recently played", fetchRecentlyPlayed)
+        timed("Likes", fetchLikedTrackIds)
       ]);
-      setData({ summary, tracks, artists, albums, books, playlists: playlists.filter((playlist) => playlist.isSmart) });
+      setTrackHeavyDataLoaded(false);
+      setData((previous) => ({
+        summary,
+        tracks: previous?.tracks ?? [],
+        artists,
+        albums,
+        books,
+        playlists: previous?.playlists ?? []
+      }));
       setLikedTrackIds(new Set(likes.trackIds));
-      setUserPlaylists(playlists.filter((playlist) => !playlist.isSmart));
-      setRecentlyPlayed(recent);
-      setCurrentTrack((previous) => (previous ? tracks.find((track) => track.id === previous.id) ?? previous : tracks[0] ?? null));
-      setPlayQueue((previous) => previous.map((queuedTrack) => tracks.find((track) => track.id === queuedTrack.id) ?? queuedTrack));
       appendDebugLog(
         "info",
-        "Library load completed",
-        `${Math.round(performance.now() - startedAt)}ms | tracks=${tracks.length} | albums=${albums.length} | artists=${artists.length} | books=${books.length} | playlists=${playlists.length}`
+        "Library shell load completed",
+        `${Math.round(performance.now() - startedAt)}ms | albums=${albums.length} | artists=${artists.length} | books=${books.length}`
       );
     } catch (error) {
-      appendDebugLog("error", "Library load failed", error instanceof Error ? error.message : "Unknown library load error");
+      appendDebugLog("error", "Library shell load failed", error instanceof Error ? error.message : "Unknown library load error");
       throw error;
     } finally {
       setLibraryLoading(false);
     }
+  };
+
+  const loadTrackHeavyData = async (options?: { force?: boolean }) => {
+    if (trackHeavyDataLoading && !options?.force) {
+      return;
+    }
+
+    if (trackHeavyDataLoaded && !options?.force) {
+      return;
+    }
+
+    setTrackHeavyDataLoading(true);
+    const startedAt = performance.now();
+    appendDebugLog("info", "Track-heavy library load started");
+
+    try {
+      const timed = async <T,>(label: string, loader: () => Promise<T>) => {
+        const timerStart = performance.now();
+        const result = await loader();
+        appendDebugLog("info", `${label} loaded`, `${Math.round(performance.now() - timerStart)}ms`);
+        return result;
+      };
+
+      const [tracks, playlists, recent] = await Promise.all([
+        timed("Tracks", fetchTracks),
+        timed("Playlists", fetchPlaylists),
+        timed("Recently played", fetchRecentlyPlayed)
+      ]);
+      setData((previous) => previous
+        ? {
+            ...previous,
+            tracks,
+            playlists: playlists.filter((playlist) => playlist.isSmart)
+          }
+        : null);
+      setUserPlaylists(playlists.filter((playlist) => !playlist.isSmart));
+      setRecentlyPlayed(recent);
+      setCurrentTrack((previous) => (previous ? tracks.find((track) => track.id === previous.id) ?? previous : tracks[0] ?? null));
+      setPlayQueue((previous) => previous.map((queuedTrack) => tracks.find((track) => track.id === queuedTrack.id) ?? queuedTrack));
+      setTrackHeavyDataLoaded(true);
+      appendDebugLog(
+        "info",
+        "Track-heavy library load completed",
+        `${Math.round(performance.now() - startedAt)}ms | tracks=${tracks.length} | playlists=${playlists.length} | recent=${recent.length}`
+      );
+    } catch (error) {
+      appendDebugLog("error", "Track-heavy library load failed", error instanceof Error ? error.message : "Unknown track-heavy library load error");
+      throw error;
+    } finally {
+      setTrackHeavyDataLoading(false);
+    }
+  };
+
+  const loadFullLibrary = async () => {
+    await loadLibrary();
+    await loadTrackHeavyData({ force: true });
   };
 
   useEffect(() => {
@@ -2239,6 +2338,7 @@ export const App = () => {
 
         if (nextBootstrap.currentUser && !nextBootstrap.needsLibrarySetup) {
           await loadLibrary();
+          void loadTrackHeavyData();
         }
       } catch (nextError) {
         appendDebugLog("error", "Initial application load failed", nextError instanceof Error ? nextError.message : "Failed to load app");
@@ -2271,6 +2371,16 @@ export const App = () => {
   useEffect(() => {
     setSearchDraft(query);
   }, [query]);
+
+  useEffect(() => {
+    if (!bootstrap?.currentUser || !data || trackHeavyDataLoaded || trackHeavyDataLoading) {
+      return;
+    }
+
+    if (isTrackHeavyView(view) || deferredQuery.trim().length > 0) {
+      void loadTrackHeavyData();
+    }
+  }, [bootstrap?.currentUser, data, deferredQuery, trackHeavyDataLoaded, trackHeavyDataLoading, view]);
 
   useEffect(() => {
     if (!bootstrap?.currentUser) {
@@ -3203,7 +3313,7 @@ export const App = () => {
       }
 
       setAlbumIdentifyState(null);
-      await Promise.all([loadLibrary(), loadSelectedAlbumDetailUntilArtworkUpdates(selectedAlbumId, selectedAlbumDetail?.album.coverArtId ?? activeAlbumGroup?.coverArtId ?? null)]);
+      await Promise.all([loadFullLibrary(), loadSelectedAlbumDetailUntilArtworkUpdates(selectedAlbumId, selectedAlbumDetail?.album.coverArtId ?? activeAlbumGroup?.coverArtId ?? null)]);
       setAlbumArtRefreshToken((previous) => previous + 1);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Failed to identify album");
@@ -3229,7 +3339,7 @@ export const App = () => {
       });
       setAlbumIdentifyState(null);
       await waitForScanToComplete(previousScanCompletedAt);
-      await Promise.all([loadLibrary(), loadSelectedAlbumDetailUntilArtworkUpdates(albumIdentifyState.albumId, previousCoverArtId)]);
+      await Promise.all([loadFullLibrary(), loadSelectedAlbumDetailUntilArtworkUpdates(albumIdentifyState.albumId, previousCoverArtId)]);
       setAlbumArtRefreshToken((previous) => previous + 1);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Failed to identify album");
@@ -3298,7 +3408,7 @@ export const App = () => {
   const handleUpdateAlbumMediaKind = async (albumId: string, mediaKind: "music" | "book") => {
     try {
       const response = await updateAlbumMediaKind(albumId, mediaKind);
-      await loadLibrary();
+      await loadFullLibrary();
 
       if (response.mediaKind === "book" && response.bookId) {
         openBook(response.bookId);
@@ -3330,7 +3440,7 @@ export const App = () => {
         view: "album",
         selectedAlbumId: response.albumId
       }, { replace: true });
-      await loadLibrary();
+      await loadFullLibrary();
     } catch (nextError) {
       setAlbumTagsError(nextError instanceof Error ? nextError.message : "Failed to save album tags");
     } finally {
@@ -3349,7 +3459,7 @@ export const App = () => {
     try {
       await updateTrackTags(trackTagsEditorState.trackId, trackTagsEditorState.values);
       setTrackTagsEditorState(null);
-      await loadLibrary();
+      await loadFullLibrary();
       await refreshCurrentDetailView();
     } catch (nextError) {
       setTrackTagsError(nextError instanceof Error ? nextError.message : "Failed to save track tags");
@@ -3644,7 +3754,7 @@ export const App = () => {
       const nextBootstrap = await loadBootstrap();
 
       if (!nextBootstrap.needsLibrarySetup) {
-        await loadLibrary();
+        await loadFullLibrary();
       }
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Authentication failed");
@@ -3733,7 +3843,7 @@ export const App = () => {
       const nextBootstrap = await loadBootstrap();
 
       if (nextBootstrap.currentUser && !nextBootstrap.needsLibrarySetup) {
-        await loadLibrary();
+        await loadFullLibrary();
       }
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Failed to start folder scan");

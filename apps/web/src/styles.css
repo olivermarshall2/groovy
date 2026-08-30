@@ -1694,6 +1694,7 @@ button {
   max-height: 60vh;
   overflow: auto;
   padding: 0.95rem;
+  user-select: text;
 }
 
 .settings-log-empty {
@@ -1710,6 +1711,7 @@ button {
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
+  user-select: text;
 }
 
 .settings-save-button {

@@ -246,6 +246,29 @@ export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies
     return now.getHours() > scheduledHours || (now.getHours() === scheduledHours && now.getMinutes() >= scheduledMinutes);
   };
 
+  const primeLastRunDateForCurrentDay = () => {
+    const settings = repository.getAppSettings();
+
+    if (!settings.mobileOptimizedCoversEnabled) {
+      lastRunDate = null;
+      return;
+    }
+
+    const [hoursText, minutesText] = settings.mobileOptimizedCoverJobTime.split(":");
+    const scheduledHours = Number(hoursText);
+    const scheduledMinutes = Number(minutesText);
+
+    if (!Number.isInteger(scheduledHours) || !Number.isInteger(scheduledMinutes)) {
+      lastRunDate = null;
+      return;
+    }
+
+    const now = new Date();
+    const scheduledTimeToday = new Date(now);
+    scheduledTimeToday.setHours(scheduledHours, scheduledMinutes, 0, 0);
+    lastRunDate = now >= scheduledTimeToday ? normalizeScheduleDate(now) : null;
+  };
+
   const startRun = () => {
     if (runningJob) {
       return;
@@ -271,7 +294,6 @@ export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies
 
   const schedule = () => {
     timer = setInterval(tick, 60_000);
-    tick();
   };
 
   const resetSchedule = () => {
@@ -281,6 +303,7 @@ export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies
       timer = undefined;
     }
 
+    primeLastRunDateForCurrentDay();
     schedule();
   };
 
@@ -293,6 +316,7 @@ export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies
     },
     async start() {
       syncStatusFromSettings();
+      primeLastRunDateForCurrentDay();
       schedule();
     },
     async stop() {
