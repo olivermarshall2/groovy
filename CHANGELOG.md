@@ -6,6 +6,7 @@ All notable project changes should be recorded here. Keep the newest entry at th
 
 ### Changed
 
+- Added proper ESM JSON import attributes to the server build-info manifest imports so the Docker runtime can start cleanly on Node 22.
 - Fixed the Docker runtime image so the web package manifest is present for the settings build-info endpoint, preventing the production container from crash-looping with `ERR_MODULE_NOT_FOUND`.
 - Added a server-side fallback that derives books from tracked audiobook chapters when the primary books query returns empty, restoring Android book lists, book detail loading, and book offline sync after the mobile-cover-art update.
 - Reworked the web settings dialog into left-side `General`, `Folders`, and `Jobs` tabs with a slightly smaller settings font and a new build-information panel.

@@ -2,10 +2,10 @@ import { access } from "node:fs/promises";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { getAuthenticatedUser, requireAuth } from "./auth.js";
-import rootPackageJson from "../../../../package.json";
-import serverPackageJson from "../../package.json";
-import webPackageJson from "../../../web/package.json";
-import sharedPackageJson from "../../../../packages/shared/package.json";
+import rootPackageJson from "../../../../package.json" with { type: "json" };
+import serverPackageJson from "../../package.json" with { type: "json" };
+import webPackageJson from "../../../web/package.json" with { type: "json" };
+import sharedPackageJson from "../../../../packages/shared/package.json" with { type: "json" };
 
 const settingsSchema = z.object({
   libraryRoots: z.array(z.string().trim().min(1)).min(1),
