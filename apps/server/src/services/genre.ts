@@ -1,4 +1,11 @@
 const collapseWhitespace = (value: string) => value.replace(/\s+/g, " ").trim();
+const toTitleCase = (value: string) =>
+  value
+    .split(/([\s/-]+)/)
+    .map((part) => (/[\s/-]+/.test(part) || !part
+      ? part
+      : `${part.charAt(0).toLocaleUpperCase()}${part.slice(1)}`))
+    .join("");
 
 export const normalizeGenreLabel = (value: string | null | undefined) => {
   if (!value) {
@@ -12,7 +19,7 @@ export const normalizeGenreLabel = (value: string | null | undefined) => {
   }
 
   const lowerCased = collapsed.toLocaleLowerCase();
-  return `${lowerCased.charAt(0).toLocaleUpperCase()}${lowerCased.slice(1)}`;
+  return toTitleCase(lowerCased);
 };
 
 export const splitGenreLabels = (value: string | null | undefined) => {

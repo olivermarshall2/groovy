@@ -1604,6 +1604,33 @@ button {
   }
 }
 
+.entity-grid-skeleton {
+  pointer-events: none;
+}
+
+.entity-card-skeleton-copy {
+  display: grid;
+  gap: 0.35rem;
+  padding-top: 0.45rem;
+}
+
+.entity-card-skeleton-line {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.06), rgba(214, 150, 87, 0.14), rgba(255, 255, 255, 0.06));
+  border-radius: 999px;
+  display: block;
+  height: 0.8rem;
+  width: 82%;
+}
+
+.entity-card-skeleton-line.title {
+  height: 1rem;
+  width: 68%;
+}
+
+.entity-card-skeleton-line.short {
+  width: 46%;
+}
+
 .loading-state {
   padding: 2rem;
 }

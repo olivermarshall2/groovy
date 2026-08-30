@@ -497,6 +497,14 @@ const formatTrackTime = (seconds: number | null) => {
   return `${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
 };
 
+const toTitleCaseGenre = (value: string) =>
+  value
+    .split(/([\s/-]+)/)
+    .map((part) => (/[\s/-]+/.test(part) || !part
+      ? part
+      : `${part.charAt(0).toLocaleUpperCase()}${part.slice(1)}`))
+    .join("");
+
 const normalizeGenreLabel = (value: string | null | undefined) => {
   if (!value) {
     return null;
@@ -509,7 +517,7 @@ const normalizeGenreLabel = (value: string | null | undefined) => {
   }
 
   const lowerCased = collapsed.toLocaleLowerCase();
-  return `${lowerCased.charAt(0).toLocaleUpperCase()}${lowerCased.slice(1)}`;
+  return toTitleCaseGenre(lowerCased);
 };
 
 const normalizeGenreLabels = (values: Array<string | null | undefined>) => {
@@ -1128,6 +1136,47 @@ const ArtistArt = ({ artist, coverArtId, cacheBuster }: { artist: string; coverA
     </div>
   );
 };
+
+const LibraryCardSkeleton = ({
+  className,
+  showMetaLines = 2
+}: {
+  className: string;
+  showMetaLines?: number;
+}) => (
+  <div className={className} aria-hidden="true">
+    <div className="art-frame is-error">
+      <div className="art-placeholder" />
+    </div>
+    <div className="entity-card-skeleton-copy">
+      <span className="entity-card-skeleton-line title" />
+      {Array.from({ length: showMetaLines }).map((_, index) => (
+        <span
+          key={index}
+          className={index === showMetaLines - 1 ? "entity-card-skeleton-line short" : "entity-card-skeleton-line"}
+        />
+      ))}
+    </div>
+  </div>
+);
+
+const GridSkeleton = ({
+  className,
+  cardClassName,
+  count,
+  metaLines = 2
+}: {
+  className: string;
+  cardClassName: string;
+  count: number;
+  metaLines?: number;
+}) => (
+  <div className={`${className} entity-grid-skeleton`} aria-hidden="true">
+    {Array.from({ length: count }).map((_, index) => (
+      <LibraryCardSkeleton key={index} className={cardClassName} showMetaLines={metaLines} />
+    ))}
+  </div>
+);
 
 const NowPlayingGlyph = ({ animated = false }: { animated?: boolean }) => (
   <svg className={animated ? "now-playing-glyph is-animated" : "now-playing-glyph"} viewBox="0 0 20 20" aria-hidden="true">
@@ -4300,6 +4349,15 @@ export const App = () => {
   const scanActive = bootstrap?.scan.isScanning ?? false;
   const showEntityMetadataOnHeroImage = bootstrap?.settings.showEntityMetadataOnHeroImage ?? false;
   const contentReady = view === "settings" ? !!bootstrap : !!filteredData;
+  const canRenderShell = !!bootstrap && !needsAuth && !needsLibrarySetup;
+  const showLibraryAlbumSkeleton = (!filteredData || libraryLoading) && (libraryBrowseMode === "all" ? libraryRecentAlbumPreview.length === 0 : libraryAlbumGroups.length === 0);
+  const showLibraryArtistSkeleton = (!filteredData || libraryLoading) && libraryArtistGroups.length === 0;
+  const showLibraryBookSkeleton = (!filteredData || libraryLoading) && filteredLibraryBookGroups.length === 0;
+  const showLibraryAuthorSkeleton = (!filteredData || libraryLoading) && filteredLibraryAuthorGroups.length === 0;
+  const showAlbumsPageSkeleton = (!filteredData || libraryLoading) && recentAlbums.length === 0;
+  const showArtistsPageSkeleton = (!filteredData || libraryLoading) && artistGroups.length === 0;
+  const showBooksPageSkeleton = (!filteredData || libraryLoading) && bookGroups.length === 0;
+  const showAuthorsPageSkeleton = (!filteredData || libraryLoading) && sortedAuthorGroups.length === 0;
 
   useEffect(() => {
     if (loading || libraryLoading || !contentReady) {
@@ -4649,13 +4707,13 @@ export const App = () => {
           ))}
         </nav>
 
-        {loading || libraryLoading || (!contentReady && !needsAuth && !needsLibrarySetup) ? (
+        {loading || (!contentReady && !needsAuth && !needsLibrarySetup && !canRenderShell) ? (
           <section className="loading-state">{loading ? "Loading application..." : "Loading your indexed library..."}</section>
         ) : null}
 
         {error && !needsAuth && !needsLibrarySetup ? <p className="error-banner inline">{error}</p> : null}
 
-        {!loading && contentReady ? (
+        {!loading && (contentReady || canRenderShell) ? (
           <div className="content-scroll">
             {view === "settings" && bootstrap ? (
               <section className="settings-page">
@@ -4980,33 +5038,37 @@ export const App = () => {
                         <span>{libraryAlbumGroups.length} visible</span>
                       )}
                     </div>
-                    <IncrementalGrid
-                      items={libraryBrowseMode === "all" ? libraryRecentAlbumPreview : libraryAlbumGroups}
-                      className="album-grid"
-                      batchSize={16}
-                      initialBatchSize={libraryBrowseMode === "all" ? 8 : 16}
-                      itemKey={(album) => album.id}
-                      renderItem={(album) => (
-                        <button className="album-card wide" onClick={() => openAlbum(album.id)}>
-                          <div className={showEntityMetadataOnHeroImage ? "entity-list-art" : undefined}>
-                            <AlbumArt coverArtId={album.coverArtId} alt={album.name} />
-                            {showEntityMetadataOnHeroImage ? (
-                              <EntityListImageOverlay
-                                title={album.name}
-                                primaryLine={album.artist}
-                                secondaryLine={album.yearLabel}
-                              />
-                            ) : null}
-                          </div>
-                          {showEntityMetadataOnHeroImage ? null : (
-                            <>
-                              <strong>{album.name}</strong>
-                              <span>{album.artist} - {album.yearLabel}</span>
-                            </>
-                          )}
-                        </button>
-                      )}
-                    />
+                    {showLibraryAlbumSkeleton ? (
+                      <GridSkeleton className="album-grid" cardClassName="album-card wide" count={libraryBrowseMode === "all" ? 4 : 8} />
+                    ) : (
+                      <IncrementalGrid
+                        items={libraryBrowseMode === "all" ? libraryRecentAlbumPreview : libraryAlbumGroups}
+                        className="album-grid"
+                        batchSize={16}
+                        initialBatchSize={libraryBrowseMode === "all" ? 8 : 16}
+                        itemKey={(album) => album.id}
+                        renderItem={(album) => (
+                          <button className="album-card wide" onClick={() => openAlbum(album.id)}>
+                            <div className={showEntityMetadataOnHeroImage ? "entity-list-art" : undefined}>
+                              <AlbumArt coverArtId={album.coverArtId} alt={album.name} />
+                              {showEntityMetadataOnHeroImage ? (
+                                <EntityListImageOverlay
+                                  title={album.name}
+                                  primaryLine={album.artist}
+                                  secondaryLine={album.yearLabel}
+                                />
+                              ) : null}
+                            </div>
+                            {showEntityMetadataOnHeroImage ? null : (
+                              <>
+                                <strong>{album.name}</strong>
+                                <span>{album.artist} - {album.yearLabel}</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+                      />
+                    )}
                   </section>
                 ) : null}
 
@@ -5064,33 +5126,37 @@ export const App = () => {
                       <h2>Artists</h2>
                       <span>{libraryArtistGroups.length} artists</span>
                     </div>
-                    <IncrementalGrid
-                      items={libraryArtistGroups}
-                      className="artist-page-grid"
-                      batchSize={18}
-                      initialBatchSize={18}
-                      itemKey={(artist) => `${artist.id}:${artist.name}`}
-                      renderItem={(artist) => (
-                        <button
-                          className={showEntityMetadataOnHeroImage ? "artist-spotlight-card overlay-enabled" : "artist-spotlight-card"}
-                          onClick={() => openArtist(artist.id)}
-                        >
-                          <div className={showEntityMetadataOnHeroImage ? "artist-spotlight-art entity-list-art" : "artist-spotlight-art entity-list-art entity-list-art-plain"}>
-                            <ArtistArt artist={artist.name} coverArtId={getArtistListCoverArtId(artist)} />
-                            {showEntityMetadataOnHeroImage ? (
-                              <EntityListImageOverlay
-                                title={artist.name}
-                                secondaryLine={`${artist.albums.length} albums`}
-                                tertiaryLine={`${artist.tracks.length} tracks · ${formatDuration(artist.durationSeconds)}`}
-                              />
-                            ) : null}
-                          </div>
-                          {showEntityMetadataOnHeroImage ? null : <strong>{artist.name}</strong>}
-                          {showEntityMetadataOnHeroImage ? null : <span>{artist.albums.length} albums</span>}
-                          {showEntityMetadataOnHeroImage ? null : <span>{artist.tracks.length} tracks · {formatDuration(artist.durationSeconds)}</span>}
-                        </button>
-                      )}
-                    />
+                    {showLibraryArtistSkeleton ? (
+                      <GridSkeleton className="artist-page-grid" cardClassName="artist-spotlight-card" count={8} />
+                    ) : (
+                      <IncrementalGrid
+                        items={libraryArtistGroups}
+                        className="artist-page-grid"
+                        batchSize={18}
+                        initialBatchSize={18}
+                        itemKey={(artist) => `${artist.id}:${artist.name}`}
+                        renderItem={(artist) => (
+                          <button
+                            className={showEntityMetadataOnHeroImage ? "artist-spotlight-card overlay-enabled" : "artist-spotlight-card"}
+                            onClick={() => openArtist(artist.id)}
+                          >
+                            <div className={showEntityMetadataOnHeroImage ? "artist-spotlight-art entity-list-art" : "artist-spotlight-art entity-list-art entity-list-art-plain"}>
+                              <ArtistArt artist={artist.name} coverArtId={getArtistListCoverArtId(artist)} />
+                              {showEntityMetadataOnHeroImage ? (
+                                <EntityListImageOverlay
+                                  title={artist.name}
+                                  secondaryLine={`${artist.albums.length} albums`}
+                                  tertiaryLine={`${artist.tracks.length} tracks · ${formatDuration(artist.durationSeconds)}`}
+                                />
+                              ) : null}
+                            </div>
+                            {showEntityMetadataOnHeroImage ? null : <strong>{artist.name}</strong>}
+                            {showEntityMetadataOnHeroImage ? null : <span>{artist.albums.length} albums</span>}
+                            {showEntityMetadataOnHeroImage ? null : <span>{artist.tracks.length} tracks · {formatDuration(artist.durationSeconds)}</span>}
+                          </button>
+                        )}
+                      />
+                    )}
                   </section>
                 ) : null}
 
@@ -5188,51 +5254,55 @@ export const App = () => {
                         </div>
                       </div>
                     </div>
-                    <IncrementalGrid
-                      items={filteredLibraryBookGroups}
-                      className="album-grid"
-                      batchSize={18}
-                      initialBatchSize={18}
-                      itemKey={(book) => book.id}
-                      renderItem={(book) => {
-                        const isCompleted = isBookCompleted(getBookCardProgress(book), book.tracks);
-                        const isInProgress = isBookInProgress(getBookCardProgress(book), book.tracks);
-                        const resumeLabel = isCompleted ? null : getBookCardResumeLabel(book);
+                    {showLibraryBookSkeleton ? (
+                      <GridSkeleton className="album-grid" cardClassName="album-card wide" count={8} metaLines={3} />
+                    ) : (
+                      <IncrementalGrid
+                        items={filteredLibraryBookGroups}
+                        className="album-grid"
+                        batchSize={18}
+                        initialBatchSize={18}
+                        itemKey={(book) => book.id}
+                        renderItem={(book) => {
+                          const isCompleted = isBookCompleted(getBookCardProgress(book), book.tracks);
+                          const isInProgress = isBookInProgress(getBookCardProgress(book), book.tracks);
+                          const resumeLabel = isCompleted ? null : getBookCardResumeLabel(book);
 
-                        return (
-                          <button className="album-card wide" onClick={() => openBook(book.id)}>
-                            <div className={showEntityMetadataOnHeroImage ? "entity-list-art" : "entity-list-art entity-list-art-plain"}>
-                              <AlbumArt coverArtId={book.coverArtId} alt={book.title} />
-                              {isCompleted ? (
-                                <span className="entity-art-status-badge complete">
-                                  <CircleCheck className="h-4 w-4" />
-                                  <span>Complete</span>
-                                </span>
-                              ) : isInProgress ? (
-                                <span className="entity-art-status-badge progress">
-                                  <span>In progress</span>
-                                </span>
-                              ) : null}
-                              {showEntityMetadataOnHeroImage ? (
-                                <EntityListImageOverlay
-                                  title={book.title}
-                                  primaryLine={book.author}
-                                  secondaryLine={`${book.trackCount} chapters · ${formatDuration(book.durationSeconds)}`}
-                                  tertiaryLine={resumeLabel ? `Resume: ${resumeLabel}` : null}
-                                />
-                              ) : null}
-                            </div>
-                            {showEntityMetadataOnHeroImage ? null : (
-                              <>
-                                <strong>{book.title}</strong>
-                                <span>{book.author} - {book.trackCount} chapters · {formatDuration(book.durationSeconds)}</span>
-                                {resumeLabel ? <span>Resume: {resumeLabel}</span> : null}
-                              </>
-                            )}
-                          </button>
-                        );
-                      }}
-                    />
+                          return (
+                            <button className="album-card wide" onClick={() => openBook(book.id)}>
+                              <div className={showEntityMetadataOnHeroImage ? "entity-list-art" : "entity-list-art entity-list-art-plain"}>
+                                <AlbumArt coverArtId={book.coverArtId} alt={book.title} />
+                                {isCompleted ? (
+                                  <span className="entity-art-status-badge complete">
+                                    <CircleCheck className="h-4 w-4" />
+                                    <span>Complete</span>
+                                  </span>
+                                ) : isInProgress ? (
+                                  <span className="entity-art-status-badge progress">
+                                    <span>In progress</span>
+                                  </span>
+                                ) : null}
+                                {showEntityMetadataOnHeroImage ? (
+                                  <EntityListImageOverlay
+                                    title={book.title}
+                                    primaryLine={book.author}
+                                    secondaryLine={`${book.trackCount} chapters · ${formatDuration(book.durationSeconds)}`}
+                                    tertiaryLine={resumeLabel ? `Resume: ${resumeLabel}` : null}
+                                  />
+                                ) : null}
+                              </div>
+                              {showEntityMetadataOnHeroImage ? null : (
+                                <>
+                                  <strong>{book.title}</strong>
+                                  <span>{book.author} - {book.trackCount} chapters · {formatDuration(book.durationSeconds)}</span>
+                                  {resumeLabel ? <span>Resume: {resumeLabel}</span> : null}
+                                </>
+                              )}
+                            </button>
+                          );
+                        }}
+                      />
+                    )}
                   </section>
                 ) : null}
 
@@ -5289,36 +5359,40 @@ export const App = () => {
                         </div>
                       </div>
                     </div>
-                  <IncrementalGrid
-                    items={filteredLibraryAuthorGroups}
-                    className="artist-page-grid"
-                    batchSize={18}
-                    initialBatchSize={18}
-                    itemKey={(author) => `${author.id}:${author.name}`}
-                    renderItem={(author) => (
-                      <button
-                        className={showEntityMetadataOnHeroImage ? "artist-spotlight-card overlay-enabled" : "artist-spotlight-card"}
-                        onClick={() => openAuthor(author.id)}
-                      >
-                        <div className={showEntityMetadataOnHeroImage ? "artist-spotlight-art entity-list-art" : "artist-spotlight-art entity-list-art entity-list-art-plain"}>
-                          <ArtistArt
-                            artist={author.name}
-                            coverArtId={getAuthorListCoverArtId(author, filteredData?.summary.lastScanAt ?? null)}
-                          />
-                          {showEntityMetadataOnHeroImage ? (
-                            <EntityListImageOverlay
-                              title={author.name}
-                              secondaryLine={`${author.books.length} books`}
-                              tertiaryLine={`${author.tracks.length} chapters · ${formatDuration(author.durationSeconds)}`}
+                  {showLibraryAuthorSkeleton ? (
+                    <GridSkeleton className="artist-page-grid" cardClassName="artist-spotlight-card" count={8} />
+                  ) : (
+                    <IncrementalGrid
+                      items={filteredLibraryAuthorGroups}
+                      className="artist-page-grid"
+                      batchSize={18}
+                      initialBatchSize={18}
+                      itemKey={(author) => `${author.id}:${author.name}`}
+                      renderItem={(author) => (
+                        <button
+                          className={showEntityMetadataOnHeroImage ? "artist-spotlight-card overlay-enabled" : "artist-spotlight-card"}
+                          onClick={() => openAuthor(author.id)}
+                        >
+                          <div className={showEntityMetadataOnHeroImage ? "artist-spotlight-art entity-list-art" : "artist-spotlight-art entity-list-art entity-list-art-plain"}>
+                            <ArtistArt
+                              artist={author.name}
+                              coverArtId={getAuthorListCoverArtId(author, filteredData?.summary.lastScanAt ?? null)}
                             />
-                          ) : null}
-                        </div>
-                        {showEntityMetadataOnHeroImage ? null : <strong>{author.name}</strong>}
-                        {showEntityMetadataOnHeroImage ? null : <span>{author.books.length} books</span>}
-                        {showEntityMetadataOnHeroImage ? null : <span>{author.tracks.length} chapters · {formatDuration(author.durationSeconds)}</span>}
-                      </button>
-                    )}
-                  />
+                            {showEntityMetadataOnHeroImage ? (
+                              <EntityListImageOverlay
+                                title={author.name}
+                                secondaryLine={`${author.books.length} books`}
+                                tertiaryLine={`${author.tracks.length} chapters · ${formatDuration(author.durationSeconds)}`}
+                              />
+                            ) : null}
+                          </div>
+                          {showEntityMetadataOnHeroImage ? null : <strong>{author.name}</strong>}
+                          {showEntityMetadataOnHeroImage ? null : <span>{author.books.length} books</span>}
+                          {showEntityMetadataOnHeroImage ? null : <span>{author.tracks.length} chapters · {formatDuration(author.durationSeconds)}</span>}
+                        </button>
+                      )}
+                    />
+                  )}
                   </section>
                 ) : null}
 
@@ -5439,28 +5513,32 @@ export const App = () => {
                     <h2>Recently Added</h2>
                     <span>{recentAlbums.length} items</span>
                   </div>
-                  <div className="album-grid">
-                    {recentAlbums.map((album) => (
-                      <button key={album.id} className="album-card wide" onClick={() => openAlbum(album.id)}>
-                        <div className={showEntityMetadataOnHeroImage ? "entity-list-art" : undefined}>
-                          <AlbumArt coverArtId={album.coverArtId} alt={album.name} />
-                          {showEntityMetadataOnHeroImage ? (
-                            <EntityListImageOverlay
-                              title={album.name}
-                              primaryLine={album.artist}
-                              secondaryLine={album.yearLabel}
-                            />
-                          ) : null}
-                        </div>
-                        {showEntityMetadataOnHeroImage ? null : (
-                          <>
-                            <strong>{album.name}</strong>
-                            <span>{album.artist} - {album.yearLabel}</span>
-                          </>
-                        )}
-                      </button>
-                    ))}
-                  </div>
+                  {showAlbumsPageSkeleton ? (
+                    <GridSkeleton className="album-grid" cardClassName="album-card wide" count={8} />
+                  ) : (
+                    <div className="album-grid">
+                      {recentAlbums.map((album) => (
+                        <button key={album.id} className="album-card wide" onClick={() => openAlbum(album.id)}>
+                          <div className={showEntityMetadataOnHeroImage ? "entity-list-art" : undefined}>
+                            <AlbumArt coverArtId={album.coverArtId} alt={album.name} />
+                            {showEntityMetadataOnHeroImage ? (
+                              <EntityListImageOverlay
+                                title={album.name}
+                                primaryLine={album.artist}
+                                secondaryLine={album.yearLabel}
+                              />
+                            ) : null}
+                          </div>
+                          {showEntityMetadataOnHeroImage ? null : (
+                            <>
+                              <strong>{album.name}</strong>
+                              <span>{album.artist} - {album.yearLabel}</span>
+                            </>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </section>
 
                 <section className="content-section">
@@ -5997,29 +6075,33 @@ export const App = () => {
                     <h2>Artist Directory</h2>
                     <span>Play an entire artist catalog from one card</span>
                   </div>
-                  <div className="artist-page-grid">
-                    {artistGroups.map((artist) => (
-                        <button
-                          key={`${artist.id}:${artist.name}`}
-                          className={showEntityMetadataOnHeroImage ? "artist-spotlight-card overlay-enabled" : "artist-spotlight-card"}
-                          onClick={() => openArtist(artist.id)}
-                        >
-                          <div className={showEntityMetadataOnHeroImage ? "artist-spotlight-art entity-list-art" : "artist-spotlight-art entity-list-art entity-list-art-plain"}>
-                            <ArtistArt artist={artist.name} coverArtId={getArtistListCoverArtId(artist)} />
-                            {showEntityMetadataOnHeroImage ? (
-                              <EntityListImageOverlay
-                                title={artist.name}
-                                secondaryLine={`${artist.albums.length} albums`}
-                                tertiaryLine={`${artist.tracks.length} tracks · ${formatDuration(artist.durationSeconds)}`}
-                              />
-                            ) : null}
-                          </div>
-                          {showEntityMetadataOnHeroImage ? null : <strong>{artist.name}</strong>}
-                        {showEntityMetadataOnHeroImage ? null : <span>{artist.albums.length} albums</span>}
-                        {showEntityMetadataOnHeroImage ? null : <span>{artist.tracks.length} tracks · {formatDuration(artist.durationSeconds)}</span>}
-                      </button>
-                    ))}
-                  </div>
+                  {showArtistsPageSkeleton ? (
+                    <GridSkeleton className="artist-page-grid" cardClassName="artist-spotlight-card" count={8} />
+                  ) : (
+                    <div className="artist-page-grid">
+                      {artistGroups.map((artist) => (
+                          <button
+                            key={`${artist.id}:${artist.name}`}
+                            className={showEntityMetadataOnHeroImage ? "artist-spotlight-card overlay-enabled" : "artist-spotlight-card"}
+                            onClick={() => openArtist(artist.id)}
+                          >
+                            <div className={showEntityMetadataOnHeroImage ? "artist-spotlight-art entity-list-art" : "artist-spotlight-art entity-list-art entity-list-art-plain"}>
+                              <ArtistArt artist={artist.name} coverArtId={getArtistListCoverArtId(artist)} />
+                              {showEntityMetadataOnHeroImage ? (
+                                <EntityListImageOverlay
+                                  title={artist.name}
+                                  secondaryLine={`${artist.albums.length} albums`}
+                                  tertiaryLine={`${artist.tracks.length} tracks · ${formatDuration(artist.durationSeconds)}`}
+                                />
+                              ) : null}
+                            </div>
+                            {showEntityMetadataOnHeroImage ? null : <strong>{artist.name}</strong>}
+                          {showEntityMetadataOnHeroImage ? null : <span>{artist.albums.length} albums</span>}
+                          {showEntityMetadataOnHeroImage ? null : <span>{artist.tracks.length} tracks · {formatDuration(artist.durationSeconds)}</span>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </section>
               </>
             ) : null}
@@ -6085,36 +6167,40 @@ export const App = () => {
                       </div>
                     </div>
                   </div>
-                  <IncrementalGrid
-                    items={sortedAuthorGroups}
-                    className="artist-page-grid"
-                    batchSize={18}
-                    initialBatchSize={18}
-                    itemKey={(author) => `${author.id}:${author.name}`}
-                    renderItem={(author) => (
-                      <button
-                        className={showEntityMetadataOnHeroImage ? "artist-spotlight-card overlay-enabled" : "artist-spotlight-card"}
-                        onClick={() => openAuthor(author.id)}
-                      >
-                        <div className={showEntityMetadataOnHeroImage ? "artist-spotlight-art entity-list-art" : "artist-spotlight-art entity-list-art entity-list-art-plain"}>
-                          <ArtistArt
-                            artist={author.name}
-                            coverArtId={getAuthorListCoverArtId(author, filteredData?.summary.lastScanAt ?? null)}
-                          />
-                          {showEntityMetadataOnHeroImage ? (
-                            <EntityListImageOverlay
-                              title={author.name}
-                              secondaryLine={`${author.books.length} books`}
-                              tertiaryLine={`${author.tracks.length} chapters · ${formatDuration(author.durationSeconds)}`}
+                  {showAuthorsPageSkeleton ? (
+                    <GridSkeleton className="artist-page-grid" cardClassName="artist-spotlight-card" count={8} />
+                  ) : (
+                    <IncrementalGrid
+                      items={sortedAuthorGroups}
+                      className="artist-page-grid"
+                      batchSize={18}
+                      initialBatchSize={18}
+                      itemKey={(author) => `${author.id}:${author.name}`}
+                      renderItem={(author) => (
+                        <button
+                          className={showEntityMetadataOnHeroImage ? "artist-spotlight-card overlay-enabled" : "artist-spotlight-card"}
+                          onClick={() => openAuthor(author.id)}
+                        >
+                          <div className={showEntityMetadataOnHeroImage ? "artist-spotlight-art entity-list-art" : "artist-spotlight-art entity-list-art entity-list-art-plain"}>
+                            <ArtistArt
+                              artist={author.name}
+                              coverArtId={getAuthorListCoverArtId(author, filteredData?.summary.lastScanAt ?? null)}
                             />
-                          ) : null}
-                        </div>
-                        {showEntityMetadataOnHeroImage ? null : <strong>{author.name}</strong>}
-                        {showEntityMetadataOnHeroImage ? null : <span>{author.books.length} books</span>}
-                        {showEntityMetadataOnHeroImage ? null : <span>{author.tracks.length} chapters · {formatDuration(author.durationSeconds)}</span>}
-                      </button>
-                    )}
-                  />
+                            {showEntityMetadataOnHeroImage ? (
+                              <EntityListImageOverlay
+                                title={author.name}
+                                secondaryLine={`${author.books.length} books`}
+                                tertiaryLine={`${author.tracks.length} chapters · ${formatDuration(author.durationSeconds)}`}
+                              />
+                            ) : null}
+                          </div>
+                          {showEntityMetadataOnHeroImage ? null : <strong>{author.name}</strong>}
+                          {showEntityMetadataOnHeroImage ? null : <span>{author.books.length} books</span>}
+                          {showEntityMetadataOnHeroImage ? null : <span>{author.tracks.length} chapters · {formatDuration(author.durationSeconds)}</span>}
+                        </button>
+                      )}
+                    />
+                  )}
                 </section>
               </>
             ) : null}
@@ -6133,51 +6219,55 @@ export const App = () => {
                     <h2>Book Shelf</h2>
                     <span>Resume where you left off or start from the beginning</span>
                   </div>
-                  <IncrementalGrid
-                    items={bookGroups}
-                    className="album-grid"
-                    batchSize={18}
-                    initialBatchSize={18}
-                    itemKey={(book) => book.id}
-                    renderItem={(book) => {
-                      const isCompleted = isBookCompleted(getBookCardProgress(book), book.tracks);
-                      const isInProgress = isBookInProgress(getBookCardProgress(book), book.tracks);
-                      const resumeLabel = isCompleted ? null : getBookCardResumeLabel(book);
+                  {showBooksPageSkeleton ? (
+                    <GridSkeleton className="album-grid" cardClassName="album-card wide" count={8} metaLines={3} />
+                  ) : (
+                    <IncrementalGrid
+                      items={bookGroups}
+                      className="album-grid"
+                      batchSize={18}
+                      initialBatchSize={18}
+                      itemKey={(book) => book.id}
+                      renderItem={(book) => {
+                        const isCompleted = isBookCompleted(getBookCardProgress(book), book.tracks);
+                        const isInProgress = isBookInProgress(getBookCardProgress(book), book.tracks);
+                        const resumeLabel = isCompleted ? null : getBookCardResumeLabel(book);
 
-                      return (
-                        <button className="album-card wide" onClick={() => openBook(book.id)}>
-                          <div className={showEntityMetadataOnHeroImage ? "entity-list-art" : "entity-list-art entity-list-art-plain"}>
-                            <AlbumArt coverArtId={book.coverArtId} alt={book.title} />
-                            {isCompleted ? (
-                              <span className="entity-art-status-badge complete">
-                                <CircleCheck className="h-4 w-4" />
-                                <span>Complete</span>
-                              </span>
-                            ) : isInProgress ? (
-                              <span className="entity-art-status-badge progress">
-                                <span>In progress</span>
-                              </span>
-                            ) : null}
-                            {showEntityMetadataOnHeroImage ? (
-                              <EntityListImageOverlay
-                                title={book.title}
-                                primaryLine={book.author}
-                                secondaryLine={`${book.trackCount} chapters · ${formatDuration(book.durationSeconds)}`}
-                                tertiaryLine={resumeLabel ? `Resume: ${resumeLabel}` : null}
-                              />
-                            ) : null}
-                          </div>
-                          {showEntityMetadataOnHeroImage ? null : (
-                            <>
-                              <strong>{book.title}</strong>
-                              <span>{book.author} - {book.trackCount} chapters · {formatDuration(book.durationSeconds)}</span>
-                              {resumeLabel ? <span>Resume: {resumeLabel}</span> : null}
-                            </>
-                          )}
-                        </button>
-                      );
-                    }}
-                  />
+                        return (
+                          <button className="album-card wide" onClick={() => openBook(book.id)}>
+                            <div className={showEntityMetadataOnHeroImage ? "entity-list-art" : "entity-list-art entity-list-art-plain"}>
+                              <AlbumArt coverArtId={book.coverArtId} alt={book.title} />
+                              {isCompleted ? (
+                                <span className="entity-art-status-badge complete">
+                                  <CircleCheck className="h-4 w-4" />
+                                  <span>Complete</span>
+                                </span>
+                              ) : isInProgress ? (
+                                <span className="entity-art-status-badge progress">
+                                  <span>In progress</span>
+                                </span>
+                              ) : null}
+                              {showEntityMetadataOnHeroImage ? (
+                                <EntityListImageOverlay
+                                  title={book.title}
+                                  primaryLine={book.author}
+                                  secondaryLine={`${book.trackCount} chapters · ${formatDuration(book.durationSeconds)}`}
+                                  tertiaryLine={resumeLabel ? `Resume: ${resumeLabel}` : null}
+                                />
+                              ) : null}
+                            </div>
+                            {showEntityMetadataOnHeroImage ? null : (
+                              <>
+                                <strong>{book.title}</strong>
+                                <span>{book.author} - {book.trackCount} chapters · {formatDuration(book.durationSeconds)}</span>
+                                {resumeLabel ? <span>Resume: {resumeLabel}</span> : null}
+                              </>
+                            )}
+                          </button>
+                        );
+                      }}
+                    />
+                  )}
                 </section>
               </>
             ) : null}

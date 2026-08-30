@@ -6,6 +6,9 @@ All notable project changes should be recorded here. Keep the newest entry at th
 
 ### Changed
 
+- Added real list-page loading skeletons for the web Library, Albums, Artists, Books, and Authors routes so those pages no longer appear empty while the library payload is still arriving.
+- Switched genre normalization to title case so labels such as `progressive rock` and `PROGRESSIVE ROCK` converge to `Progressive Rock` across the server, web filters, and OpenSubsonic output.
+- Bumped the server and web build versions to `0.1.1` so the Settings page clearly shows this update after deployment.
 - Kept list-card artwork placeholders visible across Library, Albums, Artists, Authors, Books, and similar web grids until real cover art successfully loads, and stopped failed image requests from collapsing into empty dark panels.
 - Tightened the OpenSubsonic genre normalization pass so strict builds keep the case-collapsed genre list logic type-safe and deployable.
 - Added a defensive web-side genre normalizer and normalized OpenSubsonic `getGenres` output so mixed-case genre labels are collapsed even when older cached or pre-normalized library data is still present.
