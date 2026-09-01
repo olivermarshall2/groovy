@@ -1012,6 +1012,26 @@ button {
   gap: 0.55rem;
 }
 
+.section-filter-genre-grid {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.section-filter-genre-chip {
+  align-items: center;
+  display: inline-flex;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.section-filter-genre-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .album-grid {
   display: grid;
   gap: 1rem;

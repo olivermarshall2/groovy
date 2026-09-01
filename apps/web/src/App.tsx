@@ -2189,6 +2189,7 @@ export const App = () => {
   const [view, setView] = useState<ViewName>(initialRoute.view);
   const [libraryBrowseMode, setLibraryBrowseMode] = useState<LibraryBrowseMode>("all");
   const [selectedGenreFilter, setSelectedGenreFilter] = useState<string>("all");
+  const [selectedBookGenreFilters, setSelectedBookGenreFilters] = useState<string[]>([]);
   const [libraryTrackFilter, setLibraryTrackFilter] = useState("");
   const [libraryRecentlyAddedOnly, setLibraryRecentlyAddedOnly] = useState(false);
   const [libraryBooksFilterMenuOpen, setLibraryBooksFilterMenuOpen] = useState(false);
@@ -2957,6 +2958,9 @@ export const App = () => {
     }
   }, [libraryGenres, selectedGenreFilter]);
   useEffect(() => {
+    setSelectedBookGenreFilters((previous) => previous.filter((genre) => libraryGenres.includes(genre)));
+  }, [libraryGenres]);
+  useEffect(() => {
     if (libraryBrowseMode !== "books") {
       setLibraryBooksFilterMenuOpen(false);
     }
@@ -2970,6 +2974,15 @@ export const App = () => {
     selectedGenreFilter === "all" ||
     normalizeGenreLabels([track.genre])
       .includes(selectedGenreFilter);
+  const bookGenreMatches = (track: TrackRecord) =>
+    selectedBookGenreFilters.length === 0 ||
+    normalizeGenreLabels([track.genre])
+      .some((genre) => selectedBookGenreFilters.includes(genre));
+  const toggleBookGenreFilter = (genre: string) => {
+    setSelectedBookGenreFilters((previous) =>
+      previous.includes(genre) ? previous.filter((selected) => selected !== genre) : [...previous, genre]
+    );
+  };
   const libraryAllTracks = useMemo(() => {
     if (!filteredData || !isLibraryView) {
       return [];
@@ -2994,7 +3007,10 @@ export const App = () => {
     [filteredData, isLibraryView, selectedGenreFilter]
   );
   const libraryMusicTracksFiltered = useMemo(() => libraryTracksFiltered.filter((track) => track.mediaKind !== "book"), [libraryTracksFiltered]);
-  const libraryBookTracksFiltered = useMemo(() => libraryTracksFiltered.filter((track) => track.mediaKind === "book"), [libraryTracksFiltered]);
+  const libraryBookTracksFiltered = useMemo(
+    () => libraryTracksFiltered.filter((track) => track.mediaKind === "book" && bookGenreMatches(track)),
+    [libraryTracksFiltered, selectedBookGenreFilters]
+  );
   const libraryAlbumGroups = useMemo(() => {
     if (!filteredData || !isLibraryView) {
       return [];
@@ -5000,7 +5016,7 @@ export const App = () => {
                         className={libraryBrowseMode === option.id ? "chip chip-primary active" : "chip chip-primary"}
                         onClick={() => {
                           setLibraryBrowseMode(option.id as LibraryBrowseMode);
-                          if (option.id === "all" || option.id === "authors") {
+                          if (option.id === "all" || option.id === "books" || option.id === "authors") {
                             setSelectedGenreFilter("all");
                           }
                         }}
@@ -5009,7 +5025,7 @@ export const App = () => {
                       </button>
                     ))}
                   </div>
-                  {libraryBrowseMode !== "all" && libraryBrowseMode !== "authors" ? (
+                  {libraryBrowseMode === "albums" || libraryBrowseMode === "artists" ? (
                     <div className="chip-row secondary">
                       <button className={selectedGenreFilter === "all" ? "chip chip-genre active" : "chip chip-genre"} onClick={() => setSelectedGenreFilter("all")}>
                         All Genres
@@ -5228,6 +5244,28 @@ export const App = () => {
                                 </label>
                               </div>
                               <div className="section-filter-group">
+                                <strong>Genres</strong>
+                                <span>Select one or more genres to include.</span>
+                                <div className="section-filter-genre-grid">
+                                  {libraryGenres.map((genre) => {
+                                    const isSelected = selectedBookGenreFilters.includes(genre);
+
+                                    return (
+                                      <button
+                                        key={genre}
+                                        type="button"
+                                        className={isSelected ? "chip chip-genre active section-filter-genre-chip" : "chip chip-genre section-filter-genre-chip"}
+                                        onClick={() => toggleBookGenreFilter(genre)}
+                                        aria-pressed={isSelected}
+                                      >
+                                        <span>{genre}</span>
+                                        {isSelected ? <X className="h-3.5 w-3.5" aria-hidden="true" /> : null}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                              <div className="section-filter-group">
                                 <strong>Sort by</strong>
                                 <div className="section-filter-choice-row">
                                   {[
@@ -5336,6 +5374,28 @@ export const App = () => {
                               <div className="section-filter-copy">
                                 <strong>Author sorting</strong>
                                 <span>Choose how audiobook authors are ordered.</span>
+                              </div>
+                              <div className="section-filter-group">
+                                <strong>Genres</strong>
+                                <span>Select one or more genres to include.</span>
+                                <div className="section-filter-genre-grid">
+                                  {libraryGenres.map((genre) => {
+                                    const isSelected = selectedBookGenreFilters.includes(genre);
+
+                                    return (
+                                      <button
+                                        key={genre}
+                                        type="button"
+                                        className={isSelected ? "chip chip-genre active section-filter-genre-chip" : "chip chip-genre section-filter-genre-chip"}
+                                        onClick={() => toggleBookGenreFilter(genre)}
+                                        aria-pressed={isSelected}
+                                      >
+                                        <span>{genre}</span>
+                                        {isSelected ? <X className="h-3.5 w-3.5" aria-hidden="true" /> : null}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
                               </div>
                               <div className="section-filter-group">
                                 <strong>Sort by</strong>

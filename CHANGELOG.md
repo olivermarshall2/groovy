@@ -6,6 +6,8 @@ All notable project changes should be recorded here. Keep the newest entry at th
 
 ### Changed
 
+- Moved Library Books and Authors genre choices into their Filter menus, added two-column multi-select genre filtering, and made every active genre removable directly from its capsule with an `X`.
+- Bumped the web build version to `0.1.3`.
 - Fixed the web list-page placeholder trigger so Library, Albums, Artists, Books, and Authors now show skeleton cards during the deferred track-heavy loading phase instead of rendering blank sections.
 - Added real list-page loading skeletons for the web Library, Albums, Artists, Books, and Authors routes so those pages no longer appear empty while the library payload is still arriving.
 - Switched genre normalization to title case so labels such as `progressive rock` and `PROGRESSIVE ROCK` converge to `Progressive Rock` across the server, web filters, and OpenSubsonic output.
