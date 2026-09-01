@@ -8,13 +8,19 @@ import {
 
 const register = async () => {
   TrackPlayer.addEventListener(Event.RemotePlay, () => {
-    void recordTrackPlayerRemoteEvent("RemotePlay");
-    void TrackPlayer.play();
+    void (async () => {
+      await recordTrackPlayerRemoteEvent("RemotePlay", { action: "resume-existing-queue" });
+      await TrackPlayer.play();
+      await recordTrackPlayerRemoteEvent("RemotePlay completed", { action: "resume-existing-queue" });
+    })();
   });
 
   TrackPlayer.addEventListener(Event.RemotePause, () => {
-    void recordTrackPlayerRemoteEvent("RemotePause");
-    void TrackPlayer.pause();
+    void (async () => {
+      await recordTrackPlayerRemoteEvent("RemotePause", { action: "pause-only" });
+      await TrackPlayer.pause();
+      await recordTrackPlayerRemoteEvent("RemotePause completed", { action: "pause-only" });
+    })();
   });
 
   TrackPlayer.addEventListener(Event.RemoteNext, () => {

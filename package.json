@@ -1,7 +1,7 @@
 {
   "name": "mp3-platform",
   "private": true,
-  "version": "0.25.0",
+  "version": "0.26.0",
   "packageManager": "pnpm@10.29.1",
   "scripts": {
     "build": "pnpm -r build",

@@ -2,10 +2,20 @@
 
 All notable project changes should be recorded here. Keep the newest entry at the top.
 
+## 0.26.0 - 2026-09-01
+
+### Fixed
+
+- Made Bluetooth and lock-screen media-browser controls explicit: play now resumes the existing native queue without rebuilding or seeking it, while pause always pauses instead of toggling playback.
+- Persisted audiobook position immediately for external pause commands so pausing from a Bluetooth device or the lock screen retains the correct resume point.
+- Added remote Play/Pause completion diagnostics to make media-control behavior traceable in Android Downloads diagnostics.
+
 ## 0.25.0 - 2026-08-30
 
 ### Changed
 
+- Added matching Library Album and Artist Filter menus with two-column multi-select genres, removable active genre capsules, and sorting controls; removed their old inline genre chip row.
+- Bumped the web build version to `0.1.4`.
 - Moved Library Books and Authors genre choices into their Filter menus, added two-column multi-select genre filtering, and made every active genre removable directly from its capsule with an `X`.
 - Bumped the web build version to `0.1.3`.
 - Fixed the web list-page placeholder trigger so Library, Albums, Artists, Books, and Authors now show skeleton cards during the deferred track-heavy loading phase instead of rendering blank sections.

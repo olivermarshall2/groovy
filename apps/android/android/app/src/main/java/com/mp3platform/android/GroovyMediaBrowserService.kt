@@ -43,12 +43,14 @@ class GroovyMediaBrowserService : MediaBrowserServiceCompat() {
       setCallback(object : MediaSessionCompat.Callback() {
         override fun onPlay() {
           logInfo("Media browser session callback onPlay")
-          openDeepLink("mp3platform://browser-play-current")
+          // Resume the existing player queue; rebuilding it can reset the current position.
+          openDeepLink("mp3platform://browser-resume-playback")
         }
 
         override fun onPause() {
           logInfo("Media browser session callback onPause")
-          openDeepLink("mp3platform://browser-toggle-playback")
+          // Pause must never be implemented as a toggle because a stale session state can play or seek instead.
+          openDeepLink("mp3platform://browser-pause-playback")
         }
 
         override fun onSkipToNext() {
@@ -75,7 +77,7 @@ class GroovyMediaBrowserService : MediaBrowserServiceCompat() {
           )
 
           if (mediaId == ACTION_CONTINUE) {
-            openDeepLink("mp3platform://browser-play-current")
+            openDeepLink("mp3platform://browser-resume-playback")
             return
           }
 

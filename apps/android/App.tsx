@@ -3746,16 +3746,70 @@ const AppBody = () => {
           updatedAt: currentBookProgress.updatedAt
         });
       }
-      player.pause();
+      await player.pause();
       if (currentTrack) {
         await syncLockScreenState(currentTrack, { isPlaying: false });
       }
       return;
     }
 
-    player.play();
+    await player.play();
     if (currentTrack) {
       await syncLockScreenState(currentTrack, { isPlaying: true });
+    }
+  };
+
+  const resumePlaybackFromExternalControl = async () => {
+    const player = playerRef.current;
+    const activeTrack = queueRef.current[currentIndexRef.current]?.track ?? null;
+
+    if (!player || !activeTrack) {
+      await logInfo("External playback resume ignored", {
+        hasPlayer: Boolean(player),
+        currentIndex: currentIndexRef.current,
+        queueLength: queueRef.current.length
+      });
+      return;
+    }
+
+    await logInfo("External playback resume requested", {
+      trackId: activeTrack.id,
+      currentIndex: currentIndexRef.current,
+      queueLength: queueRef.current.length,
+      positionSeconds: player.currentTime
+    });
+    await player.play();
+    await syncLockScreenState(activeTrack, { isPlaying: true });
+  };
+
+  const pausePlaybackFromExternalControl = async () => {
+    const player = playerRef.current;
+    const activeTrack = queueRef.current[currentIndexRef.current]?.track ?? null;
+
+    if (!player) {
+      await logInfo("External playback pause ignored because no player is available");
+      return;
+    }
+
+    const currentBookProgress = getPersistableBookProgress(activeTrack);
+    if (currentBookProgress) {
+      applyBookProgressToState(currentBookProgress.bookId, currentBookProgress);
+      await persistLocalBookProgress(currentBookProgress.bookId, {
+        trackId: currentBookProgress.trackId,
+        positionSeconds: currentBookProgress.positionSeconds,
+        updatedAt: currentBookProgress.updatedAt
+      });
+    }
+
+    await logInfo("External playback pause requested", {
+      trackId: activeTrack?.id ?? null,
+      currentIndex: currentIndexRef.current,
+      queueLength: queueRef.current.length,
+      positionSeconds: player.currentTime
+    });
+    await player.pause();
+    if (activeTrack) {
+      await syncLockScreenState(activeTrack, { isPlaying: false });
     }
   };
 
@@ -5065,15 +5119,13 @@ const AppBody = () => {
         return;
       }
 
-      if (url.startsWith("mp3platform://browser-toggle-playback")) {
-        await togglePlayback();
+      if (url.startsWith("mp3platform://browser-pause-playback")) {
+        await pausePlaybackFromExternalControl();
         return;
       }
 
-      if (url.startsWith("mp3platform://browser-play-current")) {
-        if (currentIndexRef.current >= 0) {
-          await playQueueAt(currentIndexRef.current, playbackPosition, queueRef.current);
-        }
+      if (url.startsWith("mp3platform://browser-resume-playback") || url.startsWith("mp3platform://browser-play-current")) {
+        await resumePlaybackFromExternalControl();
         return;
       }
 

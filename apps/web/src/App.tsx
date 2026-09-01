@@ -177,6 +177,8 @@ type AlbumIdentifyState = {
 
 type LibraryBooksSortOption = "default" | "length" | "genre" | "status" | "author" | "date-added" | "year";
 type LibraryAuthorsSortOption = "author" | "book-count";
+type LibraryAlbumsSortOption = "default" | "title" | "artist" | "date-added" | "year" | "length";
+type LibraryArtistsSortOption = "artist" | "album-count" | "track-count" | "length";
 
 type AlbumTagsEditorState = {
   albumId: string;
@@ -2188,7 +2190,7 @@ export const App = () => {
 
   const [view, setView] = useState<ViewName>(initialRoute.view);
   const [libraryBrowseMode, setLibraryBrowseMode] = useState<LibraryBrowseMode>("all");
-  const [selectedGenreFilter, setSelectedGenreFilter] = useState<string>("all");
+  const [selectedMusicGenreFilters, setSelectedMusicGenreFilters] = useState<string[]>([]);
   const [selectedBookGenreFilters, setSelectedBookGenreFilters] = useState<string[]>([]);
   const [libraryTrackFilter, setLibraryTrackFilter] = useState("");
   const [libraryRecentlyAddedOnly, setLibraryRecentlyAddedOnly] = useState(false);
@@ -2197,6 +2199,10 @@ export const App = () => {
   const [showInProgressBooks, setShowInProgressBooks] = useState(true);
   const [showCachedBooks, setShowCachedBooks] = useState(true);
   const [libraryBooksSort, setLibraryBooksSort] = useState<LibraryBooksSortOption>("default");
+  const [libraryAlbumsFilterMenuOpen, setLibraryAlbumsFilterMenuOpen] = useState(false);
+  const [libraryAlbumsSort, setLibraryAlbumsSort] = useState<LibraryAlbumsSortOption>("default");
+  const [libraryArtistsFilterMenuOpen, setLibraryArtistsFilterMenuOpen] = useState(false);
+  const [libraryArtistsSort, setLibraryArtistsSort] = useState<LibraryArtistsSortOption>("artist");
   const [libraryAuthorsFilterMenuOpen, setLibraryAuthorsFilterMenuOpen] = useState(false);
   const [libraryAuthorsSort, setLibraryAuthorsSort] = useState<LibraryAuthorsSortOption>("author");
   const [bootstrap, setBootstrap] = useState<AppBootstrap | null>(null);
@@ -2953,10 +2959,8 @@ export const App = () => {
       .sort((left, right) => left.localeCompare(right));
   }, [libraryGenreSourceTracks]);
   useEffect(() => {
-    if (selectedGenreFilter !== "all" && !libraryGenres.includes(selectedGenreFilter)) {
-      setSelectedGenreFilter("all");
-    }
-  }, [libraryGenres, selectedGenreFilter]);
+    setSelectedMusicGenreFilters((previous) => previous.filter((genre) => libraryGenres.includes(genre)));
+  }, [libraryGenres]);
   useEffect(() => {
     setSelectedBookGenreFilters((previous) => previous.filter((genre) => libraryGenres.includes(genre)));
   }, [libraryGenres]);
@@ -2970,10 +2974,25 @@ export const App = () => {
       setLibraryAuthorsFilterMenuOpen(false);
     }
   }, [libraryBrowseMode]);
+  useEffect(() => {
+    if (libraryBrowseMode !== "albums") {
+      setLibraryAlbumsFilterMenuOpen(false);
+    }
+  }, [libraryBrowseMode]);
+  useEffect(() => {
+    if (libraryBrowseMode !== "artists") {
+      setLibraryArtistsFilterMenuOpen(false);
+    }
+  }, [libraryBrowseMode]);
   const genreMatches = (track: TrackRecord) =>
-    selectedGenreFilter === "all" ||
+    selectedMusicGenreFilters.length === 0 ||
     normalizeGenreLabels([track.genre])
-      .includes(selectedGenreFilter);
+      .some((genre) => selectedMusicGenreFilters.includes(genre));
+  const toggleMusicGenreFilter = (genre: string) => {
+    setSelectedMusicGenreFilters((previous) =>
+      previous.includes(genre) ? previous.filter((selected) => selected !== genre) : [...previous, genre]
+    );
+  };
   const bookGenreMatches = (track: TrackRecord) =>
     selectedBookGenreFilters.length === 0 ||
     normalizeGenreLabels([track.genre])
@@ -2983,6 +3002,26 @@ export const App = () => {
       previous.includes(genre) ? previous.filter((selected) => selected !== genre) : [...previous, genre]
     );
   };
+  const renderMusicGenreChoices = () => (
+    <div className="section-filter-genre-grid">
+      {libraryGenres.map((genre) => {
+        const isSelected = selectedMusicGenreFilters.includes(genre);
+
+        return (
+          <button
+            key={genre}
+            type="button"
+            className={isSelected ? "chip chip-genre active section-filter-genre-chip" : "chip chip-genre section-filter-genre-chip"}
+            onClick={() => toggleMusicGenreFilter(genre)}
+            aria-pressed={isSelected}
+          >
+            <span>{genre}</span>
+            {isSelected ? <X className="h-3.5 w-3.5" aria-hidden="true" /> : null}
+          </button>
+        );
+      })}
+    </div>
+  );
   const libraryAllTracks = useMemo(() => {
     if (!filteredData || !isLibraryView) {
       return [];
@@ -3004,7 +3043,7 @@ export const App = () => {
   }, [filteredData, isLibraryView, libraryRecentlyAddedOnly, libraryTrackFilter]);
   const libraryTracksFiltered = useMemo(
     () => (filteredData && isLibraryView ? filteredData.tracks.filter(genreMatches) : []),
-    [filteredData, isLibraryView, selectedGenreFilter]
+    [filteredData, isLibraryView, selectedMusicGenreFilters]
   );
   const libraryMusicTracksFiltered = useMemo(() => libraryTracksFiltered.filter((track) => track.mediaKind !== "book"), [libraryTracksFiltered]);
   const libraryBookTracksFiltered = useMemo(
@@ -3033,6 +3072,55 @@ export const App = () => {
       libraryAlbumGroups
     ).filter((artist) => artist.tracks.length > 0);
   }, [filteredData, isLibraryView, libraryAlbumGroups, libraryMusicTracksFiltered]);
+  const filteredLibraryAlbumGroups = useMemo(() => {
+    const albums = [...libraryAlbumGroups];
+
+    if (libraryAlbumsSort === "title") {
+      return albums.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+    }
+
+    if (libraryAlbumsSort === "artist") {
+      return albums.sort((left, right) => {
+        const artistDifference = left.artist.localeCompare(right.artist, undefined, { sensitivity: "base" });
+        return artistDifference || left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
+      });
+    }
+
+    if (libraryAlbumsSort === "date-added") {
+      return albums.sort((left, right) => {
+        const leftAddedAt = left.tracks.reduce((latest, track) => latest > track.modifiedAt ? latest : track.modifiedAt, "");
+        const rightAddedAt = right.tracks.reduce((latest, track) => latest > track.modifiedAt ? latest : track.modifiedAt, "");
+        return rightAddedAt.localeCompare(leftAddedAt) || left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
+      });
+    }
+
+    if (libraryAlbumsSort === "year") {
+      return albums.sort((left, right) => right.yearLabel.localeCompare(left.yearLabel, undefined, { numeric: true }) || left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+    }
+
+    if (libraryAlbumsSort === "length") {
+      return albums.sort((left, right) => right.durationSeconds - left.durationSeconds || left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+    }
+
+    return albums;
+  }, [libraryAlbumGroups, libraryAlbumsSort]);
+  const filteredLibraryArtistGroups = useMemo(() => {
+    const artists = [...libraryArtistGroups];
+
+    if (libraryArtistsSort === "album-count") {
+      return artists.sort((left, right) => right.albums.length - left.albums.length || left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+    }
+
+    if (libraryArtistsSort === "track-count") {
+      return artists.sort((left, right) => right.tracks.length - left.tracks.length || left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+    }
+
+    if (libraryArtistsSort === "length") {
+      return artists.sort((left, right) => right.durationSeconds - left.durationSeconds || left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+    }
+
+    return artists.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+  }, [libraryArtistGroups, libraryArtistsSort]);
   const libraryBookGroups = useMemo(() => {
     if (!filteredData || !isLibraryView) {
       return [];
@@ -3186,13 +3274,13 @@ export const App = () => {
       ...playlist,
       tracks: playlist.tracks.filter(genreMatches)
     }))
-    .filter((playlist) => playlist.tracks.length > 0), [userPlaylists, selectedGenreFilter, filteredData]);
+    .filter((playlist) => playlist.tracks.length > 0), [userPlaylists, selectedMusicGenreFilters, filteredData]);
   const librarySmartPlaylists = useMemo(() => playlists
     .map((playlist) => ({
       ...playlist,
       tracks: playlist.tracks.filter(genreMatches)
     }))
-    .filter((playlist) => playlist.tracks.length > 0), [playlists, selectedGenreFilter, filteredData]);
+    .filter((playlist) => playlist.tracks.length > 0), [playlists, selectedMusicGenreFilters, filteredData]);
   const playlistDetailRecords = useMemo<PlaylistDetailRecord[]>(() => {
     const personalPlaylists = userPlaylists.map((playlist) => ({
       id: playlist.id,
@@ -5016,31 +5104,12 @@ export const App = () => {
                         className={libraryBrowseMode === option.id ? "chip chip-primary active" : "chip chip-primary"}
                         onClick={() => {
                           setLibraryBrowseMode(option.id as LibraryBrowseMode);
-                          if (option.id === "all" || option.id === "books" || option.id === "authors") {
-                            setSelectedGenreFilter("all");
-                          }
                         }}
                       >
                         {option.label}
                       </button>
                     ))}
                   </div>
-                  {libraryBrowseMode === "albums" || libraryBrowseMode === "artists" ? (
-                    <div className="chip-row secondary">
-                      <button className={selectedGenreFilter === "all" ? "chip chip-genre active" : "chip chip-genre"} onClick={() => setSelectedGenreFilter("all")}>
-                        All Genres
-                      </button>
-                      {libraryGenres.map((genre) => (
-                        <button
-                          key={genre}
-                          className={selectedGenreFilter === genre ? "chip chip-genre active" : "chip chip-genre"}
-                          onClick={() => setSelectedGenreFilter(genre)}
-                        >
-                          {genre}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
                 </section>
 
                 {libraryBrowseMode === "all" || libraryBrowseMode === "albums" ? (
@@ -5052,14 +5121,55 @@ export const App = () => {
                           See All
                         </button>
                       ) : (
-                        <span>{libraryAlbumGroups.length} visible</span>
+                        <div className="section-header-actions books-filter-header-actions">
+                          <span>{filteredLibraryAlbumGroups.length} visible</span>
+                          <div className="section-filter-menu">
+                            {libraryAlbumsFilterMenuOpen ? (
+                              <button type="button" className="entity-hero-menu-backdrop" onClick={() => setLibraryAlbumsFilterMenuOpen(false)} aria-label="Close album filters" />
+                            ) : null}
+                            <button type="button" className="pill-button ghost section-filter-trigger inline-flex items-center gap-2" onClick={() => setLibraryAlbumsFilterMenuOpen((previous) => !previous)} aria-label="Open album filters">
+                              <ListFilter className="h-4 w-4" />
+                              <span>Filter</span>
+                            </button>
+                            {libraryAlbumsFilterMenuOpen ? (
+                              <div className="section-filter-panel">
+                                <div className="section-filter-copy">
+                                  <strong>Album filters</strong>
+                                  <span>Choose which genres to include and how albums are ordered.</span>
+                                </div>
+                                <div className="section-filter-group">
+                                  <strong>Genres</strong>
+                                  <span>Select one or more genres to include.</span>
+                                  {renderMusicGenreChoices()}
+                                </div>
+                                <div className="section-filter-group">
+                                  <strong>Sort by</strong>
+                                  <div className="section-filter-choice-row">
+                                    {[
+                                      { value: "default", label: "Default" },
+                                      { value: "title", label: "Title" },
+                                      { value: "artist", label: "Artist" },
+                                      { value: "date-added", label: "Date Added" },
+                                      { value: "year", label: "Year" },
+                                      { value: "length", label: "Length" }
+                                    ].map((option) => (
+                                      <button key={option.value} type="button" className={libraryAlbumsSort === option.value ? "chip chip-genre active" : "chip chip-genre"} onClick={() => setLibraryAlbumsSort(option.value as LibraryAlbumsSortOption)}>
+                                        {option.label}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
                       )}
                     </div>
                     {showLibraryAlbumSkeleton ? (
                       <GridSkeleton className="album-grid" cardClassName="album-card wide" count={libraryBrowseMode === "all" ? 4 : 8} />
                     ) : (
                       <IncrementalGrid
-                        items={libraryBrowseMode === "all" ? libraryRecentAlbumPreview : libraryAlbumGroups}
+                        items={libraryBrowseMode === "all" ? libraryRecentAlbumPreview : filteredLibraryAlbumGroups}
                         className="album-grid"
                         batchSize={16}
                         initialBatchSize={libraryBrowseMode === "all" ? 8 : 16}
@@ -5141,13 +5251,52 @@ export const App = () => {
                   <section className="content-section">
                     <div className="section-header">
                       <h2>Artists</h2>
-                      <span>{libraryArtistGroups.length} artists</span>
+                      <div className="section-header-actions books-filter-header-actions">
+                        <span>{filteredLibraryArtistGroups.length} visible</span>
+                        <div className="section-filter-menu">
+                          {libraryArtistsFilterMenuOpen ? (
+                            <button type="button" className="entity-hero-menu-backdrop" onClick={() => setLibraryArtistsFilterMenuOpen(false)} aria-label="Close artist filters" />
+                          ) : null}
+                          <button type="button" className="pill-button ghost section-filter-trigger inline-flex items-center gap-2" onClick={() => setLibraryArtistsFilterMenuOpen((previous) => !previous)} aria-label="Open artist filters">
+                            <ListFilter className="h-4 w-4" />
+                            <span>Filter</span>
+                          </button>
+                          {libraryArtistsFilterMenuOpen ? (
+                            <div className="section-filter-panel">
+                              <div className="section-filter-copy">
+                                <strong>Artist filters</strong>
+                                <span>Choose which genres to include and how artists are ordered.</span>
+                              </div>
+                              <div className="section-filter-group">
+                                <strong>Genres</strong>
+                                <span>Select one or more genres to include.</span>
+                                {renderMusicGenreChoices()}
+                              </div>
+                              <div className="section-filter-group">
+                                <strong>Sort by</strong>
+                                <div className="section-filter-choice-row">
+                                  {[
+                                    { value: "artist", label: "Artist" },
+                                    { value: "album-count", label: "Album Count" },
+                                    { value: "track-count", label: "Track Count" },
+                                    { value: "length", label: "Length" }
+                                  ].map((option) => (
+                                    <button key={option.value} type="button" className={libraryArtistsSort === option.value ? "chip chip-genre active" : "chip chip-genre"} onClick={() => setLibraryArtistsSort(option.value as LibraryArtistsSortOption)}>
+                                      {option.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
                     {showLibraryArtistSkeleton ? (
                       <GridSkeleton className="artist-page-grid" cardClassName="artist-spotlight-card" count={8} />
                     ) : (
                       <IncrementalGrid
-                        items={libraryArtistGroups}
+                        items={filteredLibraryArtistGroups}
                         className="artist-page-grid"
                         batchSize={18}
                         initialBatchSize={18}
