@@ -8,19 +8,29 @@ import {
 
 const register = async () => {
   TrackPlayer.addEventListener(Event.RemotePlay, () => {
-    void (async () => {
-      await recordTrackPlayerRemoteEvent("RemotePlay", { action: "resume-existing-queue" });
-      await TrackPlayer.play();
-      await recordTrackPlayerRemoteEvent("RemotePlay completed", { action: "resume-existing-queue" });
-    })();
+    // Transport commands must never wait for diagnostic file I/O.
+    void TrackPlayer.play().then(
+      () => void recordTrackPlayerRemoteEvent("RemotePlay completed", { action: "resume-existing-queue" }),
+      (error) =>
+        void recordTrackPlayerRemoteEvent("RemotePlay failed", {
+          action: "resume-existing-queue",
+          error: error instanceof Error ? error.message : String(error)
+        })
+    );
+    void recordTrackPlayerRemoteEvent("RemotePlay", { action: "resume-existing-queue" });
   });
 
   TrackPlayer.addEventListener(Event.RemotePause, () => {
-    void (async () => {
-      await recordTrackPlayerRemoteEvent("RemotePause", { action: "pause-only" });
-      await TrackPlayer.pause();
-      await recordTrackPlayerRemoteEvent("RemotePause completed", { action: "pause-only" });
-    })();
+    // Pause immediately, even if diagnostics storage is slow or unavailable.
+    void TrackPlayer.pause().then(
+      () => void recordTrackPlayerRemoteEvent("RemotePause completed", { action: "pause-only" }),
+      (error) =>
+        void recordTrackPlayerRemoteEvent("RemotePause failed", {
+          action: "pause-only",
+          error: error instanceof Error ? error.message : String(error)
+        })
+    );
+    void recordTrackPlayerRemoteEvent("RemotePause", { action: "pause-only" });
   });
 
   TrackPlayer.addEventListener(Event.RemoteNext, () => {

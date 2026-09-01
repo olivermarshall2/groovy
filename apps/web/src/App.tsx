@@ -126,6 +126,15 @@ type LibraryData = {
   playlists: PlaylistRecord[];
 };
 
+type LibraryCacheSnapshot = {
+  version: 1;
+  cachedAt: string;
+  data: LibraryData;
+  likedTrackIds: string[];
+  userPlaylists: UserPlaylist[];
+  recentlyPlayed: TrackRecord[];
+};
+
 type AlbumWithTracks = AlbumRecord & {
   tracks: TrackRecord[];
   yearLabel: string;
@@ -234,6 +243,52 @@ const normalizeAppSettings = (settings: Partial<AppSettings> | null | undefined)
   mobileOptimizedCoversEnabled: settings?.mobileOptimizedCoversEnabled ?? DEFAULT_APP_SETTINGS.mobileOptimizedCoversEnabled,
   mobileOptimizedCoverJobTime: settings?.mobileOptimizedCoverJobTime ?? DEFAULT_APP_SETTINGS.mobileOptimizedCoverJobTime
 });
+
+const LIBRARY_CACHE_DATABASE = "groovy-library-cache";
+const LIBRARY_CACHE_STORE = "snapshots";
+const LIBRARY_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+const getLibraryCacheKey = (email: string) => `${window.location.origin}:${email.trim().toLowerCase()}`;
+
+const openLibraryCacheDatabase = () => new Promise<IDBDatabase>((resolve, reject) => {
+  const request = window.indexedDB.open(LIBRARY_CACHE_DATABASE, 1);
+
+  request.onupgradeneeded = () => {
+    if (!request.result.objectStoreNames.contains(LIBRARY_CACHE_STORE)) {
+      request.result.createObjectStore(LIBRARY_CACHE_STORE);
+    }
+  };
+  request.onsuccess = () => resolve(request.result);
+  request.onerror = () => reject(request.error ?? new Error("Unable to open the browser library cache."));
+});
+
+const readLibraryCache = async (email: string) => {
+  const database = await openLibraryCacheDatabase();
+
+  try {
+    return await new Promise<LibraryCacheSnapshot | null>((resolve, reject) => {
+      const request = database.transaction(LIBRARY_CACHE_STORE, "readonly").objectStore(LIBRARY_CACHE_STORE).get(getLibraryCacheKey(email));
+      request.onsuccess = () => resolve((request.result as LibraryCacheSnapshot | undefined) ?? null);
+      request.onerror = () => reject(request.error ?? new Error("Unable to read the browser library cache."));
+    });
+  } finally {
+    database.close();
+  }
+};
+
+const writeLibraryCache = async (email: string, snapshot: LibraryCacheSnapshot) => {
+  const database = await openLibraryCacheDatabase();
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const request = database.transaction(LIBRARY_CACHE_STORE, "readwrite").objectStore(LIBRARY_CACHE_STORE).put(snapshot, getLibraryCacheKey(email));
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error ?? new Error("Unable to update the browser library cache."));
+    });
+  } finally {
+    database.close();
+  }
+};
 
 const navItems: Array<{ id: ViewName; label: string; icon: LucideIcon }> = [
   { id: "home", label: "Home", icon: Home },
@@ -2187,6 +2242,9 @@ export const App = () => {
   const progressSaveRef = useRef<string>("");
   const routeRenderMeasureRef = useRef<{ routeKey: string; startedAt: number } | null>(null);
   const lastBootstrapSignatureRef = useRef<string | null>(null);
+  const libraryDataRef = useRef<LibraryData | null>(null);
+  const libraryCacheWriteTimerRef = useRef<number | null>(null);
+  const trackHeavyDataLoadedRef = useRef(false);
 
   const [view, setView] = useState<ViewName>(initialRoute.view);
   const [libraryBrowseMode, setLibraryBrowseMode] = useState<LibraryBrowseMode>("all");
@@ -2280,6 +2338,15 @@ export const App = () => {
       },
       ...previous
     ].slice(0, 250));
+  };
+
+  const replaceLibraryData = (nextData: LibraryData | null) => {
+    libraryDataRef.current = nextData;
+    setData(nextData);
+  };
+  const setTrackHeavyReady = (ready: boolean) => {
+    trackHeavyDataLoadedRef.current = ready;
+    setTrackHeavyDataLoaded(ready);
   };
   const currentRoute: RouteState = {
     view,
@@ -2422,20 +2489,25 @@ export const App = () => {
         timed("Books", fetchBooks),
         timed("Likes", fetchLikedTrackIds)
       ]);
-      setTrackHeavyDataLoaded(false);
-      setData((previous) => ({
+      const previous = libraryDataRef.current;
+      const canReuseCachedTracks = Boolean(
+        previous?.tracks.length && previous.summary.lastScanAt === summary.lastScanAt
+      );
+      const nextData = {
         summary,
-        tracks: previous?.tracks ?? [],
+        tracks: canReuseCachedTracks ? previous!.tracks : [],
         artists,
         albums,
         books,
-        playlists: previous?.playlists ?? []
-      }));
+        playlists: canReuseCachedTracks ? previous!.playlists : []
+      };
+      replaceLibraryData(nextData);
+      setTrackHeavyReady(canReuseCachedTracks);
       setLikedTrackIds(new Set(likes.trackIds));
       appendDebugLog(
         "info",
         "Library shell load completed",
-        `${Math.round(performance.now() - startedAt)}ms | albums=${albums.length} | artists=${artists.length} | books=${books.length}`
+        `${Math.round(performance.now() - startedAt)}ms | albums=${albums.length} | artists=${artists.length} | books=${books.length} | trackCache=${canReuseCachedTracks ? "reused" : "refresh-needed"}`
       );
     } catch (error) {
       appendDebugLog("error", "Library shell load failed", error instanceof Error ? error.message : "Unknown library load error");
@@ -2450,7 +2522,7 @@ export const App = () => {
       return;
     }
 
-    if (trackHeavyDataLoaded && !options?.force) {
+    if (trackHeavyDataLoadedRef.current && !options?.force) {
       return;
     }
 
@@ -2471,18 +2543,20 @@ export const App = () => {
         timed("Playlists", fetchPlaylists),
         timed("Recently played", fetchRecentlyPlayed)
       ]);
-      setData((previous) => previous
+      const previous = libraryDataRef.current;
+      const nextData = previous
         ? {
             ...previous,
             tracks,
             playlists: playlists.filter((playlist) => playlist.isSmart)
           }
-        : null);
+        : null;
+      replaceLibraryData(nextData);
       setUserPlaylists(playlists.filter((playlist) => !playlist.isSmart));
       setRecentlyPlayed(recent);
       setCurrentTrack((previous) => (previous ? tracks.find((track) => track.id === previous.id) ?? previous : tracks[0] ?? null));
       setPlayQueue((previous) => previous.map((queuedTrack) => tracks.find((track) => track.id === queuedTrack.id) ?? queuedTrack));
-      setTrackHeavyDataLoaded(true);
+      setTrackHeavyReady(true);
       appendDebugLog(
         "info",
         "Track-heavy library load completed",
@@ -2499,6 +2573,34 @@ export const App = () => {
   const loadFullLibrary = async () => {
     await loadLibrary();
     await loadTrackHeavyData({ force: true });
+  };
+
+  const hydrateLibraryFromCache = async (email: string) => {
+    const startedAt = performance.now();
+
+    try {
+      const snapshot = await readLibraryCache(email);
+      const cachedAt = snapshot ? Date.parse(snapshot.cachedAt) : Number.NaN;
+
+      if (!snapshot || snapshot.version !== 1 || !Number.isFinite(cachedAt) || Date.now() - cachedAt > LIBRARY_CACHE_MAX_AGE_MS || snapshot.data.tracks.length === 0) {
+        return false;
+      }
+
+      replaceLibraryData(snapshot.data);
+      setLikedTrackIds(new Set(snapshot.likedTrackIds));
+      setUserPlaylists(snapshot.userPlaylists);
+      setRecentlyPlayed(snapshot.recentlyPlayed);
+      setTrackHeavyReady(true);
+      appendDebugLog(
+        "info",
+        "Browser library cache restored",
+        `${Math.round(performance.now() - startedAt)}ms | age=${Math.round((Date.now() - cachedAt) / 1000)}s | tracks=${snapshot.data.tracks.length}`
+      );
+      return true;
+    } catch (error) {
+      appendDebugLog("warn", "Browser library cache unavailable", error instanceof Error ? error.message : "Unknown cache error");
+      return false;
+    }
   };
 
   useEffect(() => {
@@ -2536,8 +2638,14 @@ export const App = () => {
         const nextBootstrap = await loadBootstrap();
 
         if (nextBootstrap.currentUser && !nextBootstrap.needsLibrarySetup) {
-          await loadLibrary();
-          void loadTrackHeavyData();
+          const restoredFromCache = await hydrateLibraryFromCache(nextBootstrap.currentUser.email);
+
+          if (restoredFromCache) {
+            void loadLibrary().then(() => loadTrackHeavyData()).catch(() => undefined);
+          } else {
+            await loadLibrary();
+            void loadTrackHeavyData();
+          }
         }
       } catch (nextError) {
         appendDebugLog("error", "Initial application load failed", nextError instanceof Error ? nextError.message : "Failed to load app");
@@ -2549,6 +2657,40 @@ export const App = () => {
 
     void run();
   }, []);
+
+  useEffect(() => {
+    const email = bootstrap?.currentUser?.email;
+
+    if (!email || !data || !trackHeavyDataLoaded) {
+      return;
+    }
+
+    if (libraryCacheWriteTimerRef.current !== null) {
+      window.clearTimeout(libraryCacheWriteTimerRef.current);
+    }
+
+    libraryCacheWriteTimerRef.current = window.setTimeout(() => {
+      void writeLibraryCache(email, {
+        version: 1,
+        cachedAt: new Date().toISOString(),
+        data,
+        likedTrackIds: [...likedTrackIds],
+        userPlaylists,
+        recentlyPlayed
+      }).then(() => {
+        appendDebugLog("info", "Browser library cache updated", `tracks=${data.tracks.length} | scan=${data.summary.lastScanAt ?? "unknown"}`);
+      }).catch((cacheError) => {
+        appendDebugLog("warn", "Browser library cache update failed", cacheError instanceof Error ? cacheError.message : "Unknown cache error");
+      });
+    }, 1500);
+
+    return () => {
+      if (libraryCacheWriteTimerRef.current !== null) {
+        window.clearTimeout(libraryCacheWriteTimerRef.current);
+        libraryCacheWriteTimerRef.current = null;
+      }
+    };
+  }, [bootstrap?.currentUser?.email, data?.summary.lastScanAt, data?.tracks.length, likedTrackIds, recentlyPlayed, trackHeavyDataLoaded, userPlaylists]);
 
   useEffect(() => {
     const normalizedRoute = sanitizeRouteState(parseRouteState());

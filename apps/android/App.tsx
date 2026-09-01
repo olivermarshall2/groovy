@@ -3772,13 +3772,14 @@ const AppBody = () => {
       return;
     }
 
+    // Start playback before any diagnostics or media-session updates can block.
+    await player.play();
     await logInfo("External playback resume requested", {
       trackId: activeTrack.id,
       currentIndex: currentIndexRef.current,
       queueLength: queueRef.current.length,
       positionSeconds: player.currentTime
     });
-    await player.play();
     await syncLockScreenState(activeTrack, { isPlaying: true });
   };
 
@@ -3790,6 +3791,9 @@ const AppBody = () => {
       await logInfo("External playback pause ignored because no player is available");
       return;
     }
+
+    // A remote pause must reach the audio engine before persistence or diagnostics work.
+    await player.pause();
 
     const currentBookProgress = getPersistableBookProgress(activeTrack);
     if (currentBookProgress) {
@@ -3807,7 +3811,6 @@ const AppBody = () => {
       queueLength: queueRef.current.length,
       positionSeconds: player.currentTime
     });
-    await player.pause();
     if (activeTrack) {
       await syncLockScreenState(activeTrack, { isPlaying: false });
     }

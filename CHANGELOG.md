@@ -2,6 +2,13 @@
 
 All notable project changes should be recorded here. Keep the newest entry at the top.
 
+## 0.27.0 - 2026-09-01
+
+### Fixed
+
+- Removed diagnostics file I/O from the critical path for Bluetooth and lock-screen Play/Pause controls. Transport commands now reach the native player immediately, while logging runs independently afterward.
+- Made the media-browser fallback pause the audio engine before saving a bookmark, updating metadata, or writing diagnostics, preventing slow storage from making the lock-screen controls appear frozen.
+
 ## 0.26.0 - 2026-09-01
 
 ### Fixed
@@ -14,6 +21,8 @@ All notable project changes should be recorded here. Keep the newest entry at th
 
 ### Changed
 
+- Added a versioned per-account IndexedDB library cache to the web app. After a successful refresh, the last-known catalogue, playlists, history, and likes are restored immediately after authentication; a matching server scan timestamp now skips the full track-heavy reload, while changed scans refresh in the background without blanking the cached library.
+- Bumped the web build version to `0.1.5`.
 - Added matching Library Album and Artist Filter menus with two-column multi-select genres, removable active genre capsules, and sorting controls; removed their old inline genre chip row.
 - Bumped the web build version to `0.1.4`.
 - Moved Library Books and Authors genre choices into their Filter menus, added two-column multi-select genre filtering, and made every active genre removable directly from its capsule with an `X`.
