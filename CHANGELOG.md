@@ -2,6 +2,13 @@
 
 All notable project changes should be recorded here. Keep the newest entry at the top.
 
+## 0.28.0 - 2026-09-01
+
+### Fixed
+
+- Added a short lock-screen/Bluetooth pause replay guard that ignores the first duplicate Android Play event immediately following an external Pause command, preventing audio from unexpectedly resuming several seconds after the user pauses it.
+- Added diagnostics for suppressed duplicate remote Play commands, including the remaining guard duration.
+
 ## 0.27.0 - 2026-09-01
 
 ### Fixed
@@ -21,6 +28,9 @@ All notable project changes should be recorded here. Keep the newest entry at th
 
 ### Changed
 
+- Reworked web refresh caching into a compact browser shell: cached launches now restore only card-ready Albums, Artists, Books, Authors, likes, and recent items rather than deserializing the full track catalogue. Full tracks, playlists, and track-centric data now load only when a user opens a relevant view or a filter, while Artist and Author browsing no longer forces a full-catalogue fetch.
+- Kept Home `Play Now` working with the compact shell by loading only the selected featured album's detail when playback is requested.
+- Bumped the web build version to `0.1.7`.
 - Added a versioned per-account IndexedDB library cache to the web app. After a successful refresh, the last-known catalogue, playlists, history, and likes are restored immediately after authentication; a matching server scan timestamp now skips the full track-heavy reload, while changed scans refresh in the background without blanking the cached library.
 - Bumped the web build version to `0.1.5`.
 - Added matching Library Album and Artist Filter menus with two-column multi-select genres, removable active genre capsules, and sorting controls; removed their old inline genre chip row.

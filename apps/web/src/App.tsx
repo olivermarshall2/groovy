@@ -127,7 +127,7 @@ type LibraryData = {
 };
 
 type LibraryCacheSnapshot = {
-  version: 1;
+  version: 2;
   cachedAt: string;
   data: LibraryData;
   likedTrackIds: string[];
@@ -926,13 +926,15 @@ const buildArtistGroups = (artists: ArtistRecord[], albumGroups: AlbumWithTracks
 
   return artists.map<ArtistWithTracks>((artist) => {
     const artistTracks = tracksByArtistId.get(artist.id) ?? [];
-    const artistAlbums = albumsByArtistId.get(artist.id) ?? [];
+    const artistAlbums = albumsByArtistId.get(artist.id) ?? albumGroups.filter((album) => album.artistId === artist.id);
 
     return {
       ...artist,
       tracks: artistTracks,
       albums: artistAlbums,
-      durationSeconds: artistTracks.reduce((total, track) => total + (track.durationSeconds ?? 0), 0)
+      durationSeconds: artistTracks.length > 0
+        ? artistTracks.reduce((total, track) => total + (track.durationSeconds ?? 0), 0)
+        : artistAlbums.reduce((total, album) => total + album.durationSeconds, 0)
     };
   });
 };
@@ -1000,7 +1002,9 @@ const buildAuthorGroups = (books: BookWithTracks[]) => {
       name,
       books: [...authorBooks].sort((left, right) => left.title.localeCompare(right.title)),
       tracks: sortTracksByPlaybackOrder(tracks),
-      durationSeconds: tracks.reduce((total, track) => total + (track.durationSeconds ?? 0), 0)
+      durationSeconds: tracks.length > 0
+        ? tracks.reduce((total, track) => total + (track.durationSeconds ?? 0), 0)
+        : authorBooks.reduce((total, book) => total + book.durationSeconds, 0)
     };
   });
 };
@@ -1077,7 +1081,7 @@ const buildPlaylists = (tracks: TrackRecord[], albums: AlbumWithTracks[], artist
   ].filter((playlist) => playlist.tracks.length > 0);
 };
 
-const isTrackHeavyView = (view: ViewName) => ["search", "artist", "author", "liked", "recent", "recentlyAdded", "playlists", "playlist", "queue"].includes(view);
+const isTrackHeavyView = (view: ViewName) => ["search", "liked", "recent", "recentlyAdded", "playlists", "playlist", "queue"].includes(view);
 
 const IncrementalGrid = <T,>({
   items,
@@ -2582,7 +2586,7 @@ export const App = () => {
       const snapshot = await readLibraryCache(email);
       const cachedAt = snapshot ? Date.parse(snapshot.cachedAt) : Number.NaN;
 
-      if (!snapshot || snapshot.version !== 1 || !Number.isFinite(cachedAt) || Date.now() - cachedAt > LIBRARY_CACHE_MAX_AGE_MS || snapshot.data.tracks.length === 0) {
+      if (!snapshot || snapshot.version !== 2 || !Number.isFinite(cachedAt) || Date.now() - cachedAt > LIBRARY_CACHE_MAX_AGE_MS) {
         return false;
       }
 
@@ -2590,11 +2594,11 @@ export const App = () => {
       setLikedTrackIds(new Set(snapshot.likedTrackIds));
       setUserPlaylists(snapshot.userPlaylists);
       setRecentlyPlayed(snapshot.recentlyPlayed);
-      setTrackHeavyReady(true);
+      setTrackHeavyReady(false);
       appendDebugLog(
         "info",
         "Browser library cache restored",
-        `${Math.round(performance.now() - startedAt)}ms | age=${Math.round((Date.now() - cachedAt) / 1000)}s | tracks=${snapshot.data.tracks.length}`
+        `${Math.round(performance.now() - startedAt)}ms | age=${Math.round((Date.now() - cachedAt) / 1000)}s | albums=${snapshot.data.albums.length} | books=${snapshot.data.books.length}`
       );
       return true;
     } catch (error) {
@@ -2641,10 +2645,9 @@ export const App = () => {
           const restoredFromCache = await hydrateLibraryFromCache(nextBootstrap.currentUser.email);
 
           if (restoredFromCache) {
-            void loadLibrary().then(() => loadTrackHeavyData()).catch(() => undefined);
+            void loadLibrary().catch(() => undefined);
           } else {
             await loadLibrary();
-            void loadTrackHeavyData();
           }
         }
       } catch (nextError) {
@@ -2661,7 +2664,7 @@ export const App = () => {
   useEffect(() => {
     const email = bootstrap?.currentUser?.email;
 
-    if (!email || !data || !trackHeavyDataLoaded) {
+    if (!email || !data) {
       return;
     }
 
@@ -2671,11 +2674,15 @@ export const App = () => {
 
     libraryCacheWriteTimerRef.current = window.setTimeout(() => {
       void writeLibraryCache(email, {
-        version: 1,
+        version: 2,
         cachedAt: new Date().toISOString(),
-        data,
+        data: {
+          ...data,
+          tracks: [],
+          playlists: []
+        },
         likedTrackIds: [...likedTrackIds],
-        userPlaylists,
+        userPlaylists: [],
         recentlyPlayed
       }).then(() => {
         appendDebugLog("info", "Browser library cache updated", `tracks=${data.tracks.length} | scan=${data.summary.lastScanAt ?? "unknown"}`);
@@ -2690,7 +2697,7 @@ export const App = () => {
         libraryCacheWriteTimerRef.current = null;
       }
     };
-  }, [bootstrap?.currentUser?.email, data?.summary.lastScanAt, data?.tracks.length, likedTrackIds, recentlyPlayed, trackHeavyDataLoaded, userPlaylists]);
+  }, [bootstrap?.currentUser?.email, data?.summary.lastScanAt, data?.tracks.length, likedTrackIds, recentlyPlayed, userPlaylists]);
 
   useEffect(() => {
     const normalizedRoute = sanitizeRouteState(parseRouteState());
@@ -3050,6 +3057,18 @@ export const App = () => {
           author: getBookDisplayAuthor(selectedBookDetail?.book ?? activeBookGroup!, activeBookTracks)
         }
       : null;
+  const playFeaturedAlbum = async () => {
+    if (!featuredAlbum) {
+      return;
+    }
+
+    const detail = featuredAlbum.tracks.length > 0
+      ? null
+      : await fetchAlbumDetail(featuredAlbum.id);
+    const tracks = detail ? sortTracksByPlaybackOrder(detail.tracks) : featuredAlbum.tracks;
+
+    await playTracks(tracks, featuredAlbum.name);
+  };
   const activeBookProgress =
     selectedBookDetail?.progress ??
     (activeBookGroup && activeBookGroup.lastTrackId && activeBookGroup.lastPositionSeconds !== null
@@ -3197,12 +3216,16 @@ export const App = () => {
       return [];
     }
 
+    if (!trackHeavyDataLoaded) {
+      return buildAlbumGroups(filteredData.albums, []);
+    }
+
     const albumIds = new Set(libraryMusicTracksFiltered.map((track) => track.albumId));
     return buildAlbumGroups(
       filteredData.albums.filter((album) => albumIds.has(album.id)),
       libraryMusicTracksFiltered
     ).filter((album) => album.tracks.length > 0);
-  }, [filteredData, isLibraryView, libraryMusicTracksFiltered]);
+  }, [filteredData, isLibraryView, libraryMusicTracksFiltered, trackHeavyDataLoaded]);
   const libraryArtistGroups = useMemo(() => {
     if (!filteredData || !isLibraryView) {
       return [];
@@ -3268,12 +3291,16 @@ export const App = () => {
       return [];
     }
 
+    if (!trackHeavyDataLoaded) {
+      return buildBookGroups(filteredData.books, []);
+    }
+
     const bookIds = new Set(libraryBookTracksFiltered.map((track) => track.bookId).filter(Boolean));
     return buildBookGroups(
       filteredData.books.filter((book) => bookIds.has(book.id)),
       libraryBookTracksFiltered
     ).filter((book) => book.tracks.length > 0);
-  }, [filteredData, isLibraryView, libraryBookTracksFiltered]);
+  }, [filteredData, isLibraryView, libraryBookTracksFiltered, trackHeavyDataLoaded]);
   const sortAuthorGroups = (authors: AuthorWithBooks[]) => {
     if (libraryAuthorsSort === "book-count") {
       return [...authors].sort((left, right) => {
@@ -5004,7 +5031,7 @@ export const App = () => {
                         : "This local server is ready for MP3 and FLAC libraries, responsive indexing, and client integrations."}
                     </p>
                     <div className="hero-actions">
-                      <button className="cta-button inline-flex items-center gap-2" onClick={() => (featuredAlbum ? void playTracks(featuredAlbum.tracks, featuredAlbum.name) : undefined)}>
+                      <button className="cta-button inline-flex items-center gap-2" onClick={() => void playFeaturedAlbum()}>
                         <Play className="h-4 w-4" />
                         Play now
                       </button>
@@ -5269,7 +5296,10 @@ export const App = () => {
                             {libraryAlbumsFilterMenuOpen ? (
                               <button type="button" className="entity-hero-menu-backdrop" onClick={() => setLibraryAlbumsFilterMenuOpen(false)} aria-label="Close album filters" />
                             ) : null}
-                            <button type="button" className="pill-button ghost section-filter-trigger inline-flex items-center gap-2" onClick={() => setLibraryAlbumsFilterMenuOpen((previous) => !previous)} aria-label="Open album filters">
+                            <button type="button" className="pill-button ghost section-filter-trigger inline-flex items-center gap-2" onClick={() => {
+                              setLibraryAlbumsFilterMenuOpen((previous) => !previous);
+                              void loadTrackHeavyData();
+                            }} aria-label="Open album filters">
                               <ListFilter className="h-4 w-4" />
                               <span>Filter</span>
                             </button>
@@ -5399,7 +5429,10 @@ export const App = () => {
                           {libraryArtistsFilterMenuOpen ? (
                             <button type="button" className="entity-hero-menu-backdrop" onClick={() => setLibraryArtistsFilterMenuOpen(false)} aria-label="Close artist filters" />
                           ) : null}
-                          <button type="button" className="pill-button ghost section-filter-trigger inline-flex items-center gap-2" onClick={() => setLibraryArtistsFilterMenuOpen((previous) => !previous)} aria-label="Open artist filters">
+                          <button type="button" className="pill-button ghost section-filter-trigger inline-flex items-center gap-2" onClick={() => {
+                            setLibraryArtistsFilterMenuOpen((previous) => !previous);
+                            void loadTrackHeavyData();
+                          }} aria-label="Open artist filters">
                             <ListFilter className="h-4 w-4" />
                             <span>Filter</span>
                           </button>
@@ -5486,7 +5519,10 @@ export const App = () => {
                           <button
                             type="button"
                             className="pill-button ghost section-filter-trigger inline-flex items-center gap-2"
-                            onClick={() => setLibraryBooksFilterMenuOpen((previous) => !previous)}
+                            onClick={() => {
+                              setLibraryBooksFilterMenuOpen((previous) => !previous);
+                              void loadTrackHeavyData();
+                            }}
                             aria-label="Open books filters"
                           >
                             <ListFilter className="h-4 w-4" />
@@ -5654,7 +5690,10 @@ export const App = () => {
                           <button
                             type="button"
                             className="pill-button ghost section-filter-trigger inline-flex items-center gap-2"
-                            onClick={() => setLibraryAuthorsFilterMenuOpen((previous) => !previous)}
+                            onClick={() => {
+                              setLibraryAuthorsFilterMenuOpen((previous) => !previous);
+                              void loadTrackHeavyData();
+                            }}
                             aria-label="Open author filters"
                           >
                             <ListFilter className="h-4 w-4" />
