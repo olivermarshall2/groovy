@@ -2,6 +2,7 @@ import type { Dirent } from "node:fs";
 import { access, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { LibraryRepository } from "../storage/library-repository.js";
+import { cronMatches, getCronMinuteKey } from "./cron-schedule.js";
 
 type MobileCoverJobDependencies = {
   repository: LibraryRepository;
@@ -69,19 +70,17 @@ export const findMobileCoverPathForTrack = async (trackFilePath: string) => {
 const folderHasAudioFiles = (entries: Dirent[]) =>
   entries.some((entry) => entry.isFile() && AUDIO_EXTENSIONS.has(path.extname(entry.name).toLowerCase()));
 
-const normalizeScheduleDate = (value: Date) => value.toISOString().slice(0, 10);
-
 export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies) => {
   let timer: NodeJS.Timeout | undefined;
   let runningJob: Promise<void> | null = null;
-  let lastRunDate: string | null = null;
+  let lastScheduledMinute: string | null = null;
   const status: {
     id: "mobile-cover-art";
     label: string;
     description: string;
     isEnabled: boolean;
     isRunning: boolean;
-    scheduleTime: string | null;
+    cronExpression: string | null;
     processedItems: number;
     totalItems: number;
     progressPercent: number;
@@ -95,7 +94,7 @@ export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies
     description: "Create cropped 500x500 mobile cover files for faster Android browsing and offline sync.",
     isEnabled: repository.getAppSettings().mobileOptimizedCoversEnabled,
     isRunning: false,
-    scheduleTime: repository.getAppSettings().mobileOptimizedCoverJobTime,
+    cronExpression: repository.getAppSettings().mobileOptimizedCoverJobCron,
     processedItems: 0,
     totalItems: 0,
     progressPercent: 0,
@@ -108,7 +107,7 @@ export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies
   const syncStatusFromSettings = () => {
     const settings = repository.getAppSettings();
     status.isEnabled = settings.mobileOptimizedCoversEnabled;
-    status.scheduleTime = settings.mobileOptimizedCoverJobTime;
+    status.cronExpression = settings.mobileOptimizedCoverJobCron;
   };
 
   const updateProgress = () => {
@@ -227,47 +226,6 @@ export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies
     }
   };
 
-  const shouldRunAtCurrentTime = (timeValue: string) => {
-    const [hoursText, minutesText] = timeValue.split(":");
-    const scheduledHours = Number(hoursText);
-    const scheduledMinutes = Number(minutesText);
-
-    if (!Number.isInteger(scheduledHours) || !Number.isInteger(scheduledMinutes)) {
-      return false;
-    }
-
-    const now = new Date();
-    const todayKey = normalizeScheduleDate(now);
-
-    if (lastRunDate === todayKey) {
-      return false;
-    }
-
-    return now.getHours() > scheduledHours || (now.getHours() === scheduledHours && now.getMinutes() >= scheduledMinutes);
-  };
-
-  const primeLastRunDateForCurrentDay = () => {
-    const settings = repository.getAppSettings();
-
-    if (!settings.mobileOptimizedCoversEnabled) {
-      lastRunDate = null;
-      return;
-    }
-
-    const [hoursText, minutesText] = settings.mobileOptimizedCoverJobTime.split(":");
-    const scheduledHours = Number(hoursText);
-    const scheduledMinutes = Number(minutesText);
-
-    if (!Number.isInteger(scheduledHours) || !Number.isInteger(scheduledMinutes)) {
-      lastRunDate = null;
-      return;
-    }
-
-    const now = new Date();
-    const scheduledTimeToday = new Date(now);
-    scheduledTimeToday.setHours(scheduledHours, scheduledMinutes, 0, 0);
-    lastRunDate = now >= scheduledTimeToday ? normalizeScheduleDate(now) : null;
-  };
 
   const startRun = () => {
     if (runningJob) {
@@ -275,7 +233,6 @@ export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies
     }
 
     runningJob = runJob().finally(() => {
-      lastRunDate = normalizeScheduleDate(new Date());
       runningJob = null;
     });
   };
@@ -287,7 +244,11 @@ export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies
       return;
     }
 
-    if (shouldRunAtCurrentTime(settings.mobileOptimizedCoverJobTime)) {
+    const now = new Date();
+    const minuteKey = getCronMinuteKey(now);
+
+    if (minuteKey !== lastScheduledMinute && cronMatches(settings.mobileOptimizedCoverJobCron, now)) {
+      lastScheduledMinute = minuteKey;
       startRun();
     }
   };
@@ -303,7 +264,6 @@ export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies
       timer = undefined;
     }
 
-    primeLastRunDateForCurrentDay();
     schedule();
   };
 
@@ -316,7 +276,6 @@ export const createMobileCoverJobs = ({ repository }: MobileCoverJobDependencies
     },
     async start() {
       syncStatusFromSettings();
-      primeLastRunDateForCurrentDay();
       schedule();
     },
     async stop() {

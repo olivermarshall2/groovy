@@ -28,6 +28,10 @@ All notable project changes should be recorded here. Keep the newest entry at th
 
 ### Changed
 
+- Replaced interval and daily-time scheduling with standard five-field cron expressions. Settings now presents `Folder Scan` and `Generate mobile cover art` as Jobs with individual cron schedules and `Run Now` actions; folder paths remain in Folders with a link to Jobs. Existing schedules migrate automatically to equivalent cron expressions.
+- Stopped ID3 tag edits from reloading the full web library: album edits update only the affected album and track cache entries, while track edits refresh only the current album or book detail.
+- Prevented a Folder Scan cron match from launching immediately after a server restart or schedule reset.
+- Bumped the server build version to `0.1.3` and the web build version to `0.1.8`.
 - Reworked web refresh caching into a compact browser shell: cached launches now restore only card-ready Albums, Artists, Books, Authors, likes, and recent items rather than deserializing the full track catalogue. Full tracks, playlists, and track-centric data now load only when a user opens a relevant view or a filter, while Artist and Author browsing no longer forces a full-catalogue fetch.
 - Kept Home `Play Now` working with the compact shell by loading only the selected featured album's detail when playback is requested.
 - Bumped the web build version to `0.1.7`.

@@ -76,6 +76,7 @@ import {
   fetchLibrarySummary,
   fetchPlaylists,
   fetchRecentlyPlayed,
+  runFolderScanJobNow,
   fetchTracks,
   identifyAlbum,
   generateUserApiKey,
@@ -225,23 +226,23 @@ const PLAYER_VOLUME_KEY = "mp3-platform-player-volume";
 const DEFAULT_APP_SETTINGS: AppSettings = {
   libraryRoots: [],
   bookRoots: [],
-  scanIntervalMinutes: 15,
+  folderScanCron: "*/15 * * * *",
   queueAlbumTracksOnPlay: true,
   promptBeforeReplacingQueueOnPlay: true,
   showEntityMetadataOnHeroImage: false,
   mobileOptimizedCoversEnabled: true,
-  mobileOptimizedCoverJobTime: "03:00"
+  mobileOptimizedCoverJobCron: "0 3 * * *"
 };
 
 const normalizeAppSettings = (settings: Partial<AppSettings> | null | undefined): AppSettings => ({
   libraryRoots: settings?.libraryRoots ?? [],
   bookRoots: settings?.bookRoots ?? [],
-  scanIntervalMinutes: settings?.scanIntervalMinutes ?? DEFAULT_APP_SETTINGS.scanIntervalMinutes,
+  folderScanCron: settings?.folderScanCron ?? DEFAULT_APP_SETTINGS.folderScanCron,
   queueAlbumTracksOnPlay: settings?.queueAlbumTracksOnPlay ?? DEFAULT_APP_SETTINGS.queueAlbumTracksOnPlay,
   promptBeforeReplacingQueueOnPlay: settings?.promptBeforeReplacingQueueOnPlay ?? DEFAULT_APP_SETTINGS.promptBeforeReplacingQueueOnPlay,
   showEntityMetadataOnHeroImage: settings?.showEntityMetadataOnHeroImage ?? DEFAULT_APP_SETTINGS.showEntityMetadataOnHeroImage,
   mobileOptimizedCoversEnabled: settings?.mobileOptimizedCoversEnabled ?? DEFAULT_APP_SETTINGS.mobileOptimizedCoversEnabled,
-  mobileOptimizedCoverJobTime: settings?.mobileOptimizedCoverJobTime ?? DEFAULT_APP_SETTINGS.mobileOptimizedCoverJobTime
+  mobileOptimizedCoverJobCron: settings?.mobileOptimizedCoverJobCron ?? DEFAULT_APP_SETTINGS.mobileOptimizedCoverJobCron
 });
 
 const LIBRARY_CACHE_DATABASE = "groovy-library-cache";
@@ -1613,6 +1614,7 @@ const SettingsForm = ({
   onSubmit,
   onScanLibraryRoot,
   onScanBookRoot,
+  onRunFolderScanNow,
   onRunMobileCoverJobNow,
   onClose,
   title,
@@ -1632,6 +1634,7 @@ const SettingsForm = ({
   onSubmit: (settings: AppSettings) => Promise<void>;
   onScanLibraryRoot: (settings: AppSettings, root: string) => Promise<void>;
   onScanBookRoot: (settings: AppSettings, root: string) => Promise<void>;
+  onRunFolderScanNow: () => Promise<void>;
   onRunMobileCoverJobNow: () => Promise<void>;
   onClose: () => void;
   title: string;
@@ -1641,30 +1644,31 @@ const SettingsForm = ({
 }) => {
   const initialLibraryRoot = initialSettings.libraryRoots[0] ?? "";
   const initialBookRoot = initialSettings.bookRoots[0] ?? "";
-  const initialScanInterval = String(initialSettings.scanIntervalMinutes);
+  const initialFolderScanCron = initialSettings.folderScanCron;
   const initialMobileOptimizedCoversEnabled = initialSettings.mobileOptimizedCoversEnabled;
-  const initialMobileOptimizedCoverJobTime = initialSettings.mobileOptimizedCoverJobTime;
+  const initialMobileOptimizedCoverJobCron = initialSettings.mobileOptimizedCoverJobCron;
 
   const [rootPath, setRootPath] = useState(initialLibraryRoot);
   const [bookRootPath, setBookRootPath] = useState(initialBookRoot);
-  const [scanIntervalMinutes, setScanIntervalMinutes] = useState(String(initialSettings.scanIntervalMinutes));
+  const [folderScanCron, setFolderScanCron] = useState(initialFolderScanCron);
   const [mobileOptimizedCoversEnabled, setMobileOptimizedCoversEnabled] = useState(initialMobileOptimizedCoversEnabled);
-  const [mobileOptimizedCoverJobTime, setMobileOptimizedCoverJobTime] = useState(initialMobileOptimizedCoverJobTime);
+  const [mobileOptimizedCoverJobCron, setMobileOptimizedCoverJobCron] = useState(initialMobileOptimizedCoverJobCron);
   const [showScanDetails, setShowScanDetails] = useState(false);
   const [scanElapsedMs, setScanElapsedMs] = useState(0);
   const [scanTarget, setScanTarget] = useState<"music" | "books" | null>(null);
   const [activeTab, setActiveTab] = useState<"general" | "folders" | "jobs" | "logs">("folders");
   const [copyLogState, setCopyLogState] = useState<"idle" | "copied" | "failed">("idle");
+  const folderScanJob = jobs.scheduled.find((job) => job.id === "folder-scan") ?? null;
   const mobileCoverJob = jobs.scheduled.find((job) => job.id === "mobile-cover-art") ?? null;
   const [jobElapsedMs, setJobElapsedMs] = useState(0);
 
   useEffect(() => {
     setRootPath(initialLibraryRoot);
     setBookRootPath(initialBookRoot);
-    setScanIntervalMinutes(initialScanInterval);
+    setFolderScanCron(initialFolderScanCron);
     setMobileOptimizedCoversEnabled(initialMobileOptimizedCoversEnabled);
-    setMobileOptimizedCoverJobTime(initialMobileOptimizedCoverJobTime);
-  }, [initialBookRoot, initialLibraryRoot, initialMobileOptimizedCoverJobTime, initialMobileOptimizedCoversEnabled, initialScanInterval]);
+    setMobileOptimizedCoverJobCron(initialMobileOptimizedCoverJobCron);
+  }, [initialBookRoot, initialFolderScanCron, initialLibraryRoot, initialMobileOptimizedCoverJobCron, initialMobileOptimizedCoversEnabled]);
 
   useEffect(() => {
     if (!scanBusy) {
@@ -1720,9 +1724,9 @@ const SettingsForm = ({
   const hasUnsavedChanges =
     rootPath.trim() !== initialLibraryRoot ||
     bookRootPath.trim() !== initialBookRoot ||
-    scanIntervalMinutes !== initialScanInterval ||
+    folderScanCron !== initialFolderScanCron ||
     mobileOptimizedCoversEnabled !== initialMobileOptimizedCoversEnabled ||
-    mobileOptimizedCoverJobTime !== initialMobileOptimizedCoverJobTime;
+    mobileOptimizedCoverJobCron !== initialMobileOptimizedCoverJobCron;
 
   const handleClose = () => {
     if (hasUnsavedChanges && !window.confirm("Discard unsaved library settings changes?")) {
@@ -1735,12 +1739,12 @@ const SettingsForm = ({
   const buildSettingsPayload = (): AppSettings => ({
     libraryRoots: [rootPath.trim()],
     bookRoots: bookRootPath.trim() ? [bookRootPath.trim()] : [],
-    scanIntervalMinutes: Number(scanIntervalMinutes),
+    folderScanCron: folderScanCron.trim(),
     queueAlbumTracksOnPlay: initialSettings.queueAlbumTracksOnPlay,
     promptBeforeReplacingQueueOnPlay: initialSettings.promptBeforeReplacingQueueOnPlay,
     showEntityMetadataOnHeroImage: initialSettings.showEntityMetadataOnHeroImage,
     mobileOptimizedCoversEnabled,
-    mobileOptimizedCoverJobTime
+    mobileOptimizedCoverJobCron: mobileOptimizedCoverJobCron.trim()
   });
 
   const scanElapsedLabel = (() => {
@@ -1868,6 +1872,7 @@ const SettingsForm = ({
 
           {activeTab === "folders" ? (
             <>
+              {false ? (
               <div className="scan-status-card">
                 <div className="scan-status-row">
                   <strong>{scan.isScanning ? "Library scan in progress" : "Library scan idle"}</strong>
@@ -1878,7 +1883,7 @@ const SettingsForm = ({
                     {scan.isScanning
                       ? `${scan.processedFiles} of ${scan.totalFiles} files processed in ${scanElapsedLabel}`
                       : scan.lastCompletedAt
-                        ? `Last completed ${new Date(scan.lastCompletedAt).toLocaleString()}`
+                        ? `Last completed ${new Date(scan.lastCompletedAt ?? 0).toLocaleString()}`
                         : "No completed scan yet"}
                   </span>
                   <span>{scan.queued ? "Another scan is queued" : scanHeartbeatLabel ?? ""}</span>
@@ -1922,48 +1927,40 @@ const SettingsForm = ({
                   </div>
                 ) : null}
               </div>
+              ) : null}
               <label className="field">
                 <span>Music folder root</span>
-                <div className="field-with-action">
-                  <input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="C:\\Users\\you\\Music" required />
-                  <button
-                    type="button"
-                    className="pill-button field-action-button"
-                    onClick={async () => {
-                      setScanTarget("music");
-                      await onScanLibraryRoot(buildSettingsPayload(), rootPath.trim());
-                    }}
-                    disabled={scanBusy || rootPath.trim().length === 0}
-                  >
-                    {scanBusy && scanTarget === "music" ? "Scanning..." : "Scan"}
-                  </button>
-                </div>
+                <input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="C:\\Users\\you\\Music" required />
               </label>
               <label className="field">
                 <span>Book folder</span>
-                <div className="field-with-action">
-                  <input value={bookRootPath} onChange={(event) => setBookRootPath(event.target.value)} placeholder="C:\\Users\\you\\Audiobooks" />
-                  <button
-                    type="button"
-                    className="pill-button field-action-button"
-                    onClick={async () => {
-                      setScanTarget("books");
-                      await onScanBookRoot(buildSettingsPayload(), bookRootPath.trim());
-                    }}
-                    disabled={scanBusy || bookRootPath.trim().length === 0}
-                  >
-                    {scanBusy && scanTarget === "books" ? "Scanning..." : "Scan"}
-                  </button>
-                </div>
+                <input value={bookRootPath} onChange={(event) => setBookRootPath(event.target.value)} placeholder="C:\\Users\\you\\Audiobooks" />
               </label>
-              <label className="field">
-                <span>Scan interval in minutes</span>
-                <input value={scanIntervalMinutes} onChange={(event) => setScanIntervalMinutes(event.target.value)} inputMode="numeric" required />
-              </label>
+              <p className="settings-job-copy">Folder scan schedules are controlled in the <button type="button" className="text-link-button" onClick={() => setActiveTab("jobs")}>Jobs</button> section.</p>
             </>
           ) : null}
 
           {activeTab === "jobs" ? (
+            <>
+            <div className="scan-status-card">
+              <div className="scan-status-row">
+                <strong>{folderScanJob?.label ?? "Folder Scan"}</strong>
+                <button type="button" className="pill-button ghost" onClick={() => void onRunFolderScanNow()} disabled={jobsBusy || folderScanJob?.isRunning}>
+                  {folderScanJob?.isRunning ? "Running..." : jobsBusy ? "Starting..." : "Run Now"}
+                </button>
+              </div>
+              <p className="settings-job-copy">{folderScanJob?.description ?? "Scan the configured Music and Book folders for new or changed media and artwork."}</p>
+              <label className="field">
+                <span>Cron schedule</span>
+                <input value={folderScanCron} onChange={(event) => setFolderScanCron(event.target.value)} placeholder="*/15 * * * *" required />
+                <small>Five fields: minute hour day-of-month month day-of-week. Example: `0 */6 * * *` runs every six hours.</small>
+              </label>
+              <div className="scan-status-row muted">
+                <span>{folderScanJob?.isRunning ? `${folderScanJob.processedItems} of ${folderScanJob.totalItems} files processed` : folderScanJob?.lastCompletedAt ? `Last completed ${new Date(folderScanJob.lastCompletedAt).toLocaleString()}` : "No completed run yet"}</span>
+                <span>{folderScanCron}</span>
+              </div>
+              <div className="scan-progress-bar" aria-hidden="true"><div className="scan-progress-fill" style={{ width: `${folderScanJob?.progressPercent ?? 0}%` }} /></div>
+            </div>
             <div className="scan-status-card">
               <div className="scan-status-row">
                 <strong>{mobileCoverJob?.label ?? "Generate mobile cover art"}</strong>
@@ -1989,14 +1986,14 @@ const SettingsForm = ({
                 </div>
               </label>
               <label className="field">
-                <span>Daily run time</span>
+                <span>Cron schedule</span>
                 <input
-                  type="time"
-                  value={mobileOptimizedCoverJobTime}
-                  onChange={(event) => setMobileOptimizedCoverJobTime(event.target.value)}
+                  value={mobileOptimizedCoverJobCron}
+                  onChange={(event) => setMobileOptimizedCoverJobCron(event.target.value)}
                   disabled={!mobileOptimizedCoversEnabled}
                   required
                 />
+                <small>Five fields: minute hour day-of-month month day-of-week. Example: `0 3 * * *` runs daily at 03:00.</small>
               </label>
               <div className="scan-status-row muted">
                 <span>
@@ -2006,7 +2003,7 @@ const SettingsForm = ({
                       ? `Last completed ${new Date(mobileCoverJob.lastCompletedAt).toLocaleString()}`
                       : "No completed run yet"}
                 </span>
-                <span>{mobileOptimizedCoversEnabled ? `Scheduled for ${mobileOptimizedCoverJobTime}` : "Disabled"}</span>
+                <span>{mobileOptimizedCoversEnabled ? mobileOptimizedCoverJobCron : "Disabled"}</span>
               </div>
               <div className="scan-progress-bar" aria-hidden="true">
                 <div className="scan-progress-fill" style={{ width: `${mobileCoverJob?.progressPercent ?? 0}%` }} />
@@ -2026,6 +2023,7 @@ const SettingsForm = ({
                 </div>
               ) : null}
             </div>
+            </>
           ) : null}
 
           {activeTab === "logs" ? (
@@ -3904,7 +3902,16 @@ export const App = () => {
         view: "album",
         selectedAlbumId: response.albumId
       }, { replace: true });
-      await loadFullLibrary();
+      setData((previous) => previous
+        ? {
+            ...previous,
+            albums: previous.albums.map((album) => album.id === albumTagsEditorState.albumId || album.id === response.albumId ? response.detail.album : album),
+            tracks: previous.tracks.length > 0
+              ? previous.tracks.map((track) => response.detail.tracks.find((updatedTrack) => updatedTrack.id === track.id) ?? track)
+              : previous.tracks
+          }
+        : previous
+      );
     } catch (nextError) {
       setAlbumTagsError(nextError instanceof Error ? nextError.message : "Failed to save album tags");
     } finally {
@@ -3921,9 +3928,15 @@ export const App = () => {
     setTrackTagsError(null);
 
     try {
-      await updateTrackTags(trackTagsEditorState.trackId, trackTagsEditorState.values);
+      const response = await updateTrackTags(trackTagsEditorState.trackId, trackTagsEditorState.values);
       setTrackTagsEditorState(null);
-      await loadFullLibrary();
+      setData((previous) => previous
+        ? {
+            ...previous,
+            tracks: previous.tracks.map((track) => track.id === response.track.id ? response.track : track)
+          }
+        : previous
+      );
       await refreshCurrentDetailView();
     } catch (nextError) {
       setTrackTagsError(nextError instanceof Error ? nextError.message : "Failed to save track tags");
@@ -4362,6 +4375,20 @@ export const App = () => {
     }
   };
 
+  const handleRunFolderScanJobNow = async () => {
+    setJobsBusy(true);
+    setError(null);
+
+    try {
+      const response = await runFolderScanJobNow();
+      setBootstrap((previous) => previous ? { ...previous, jobs: response.jobs } : previous);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Failed to start folder scan");
+    } finally {
+      setJobsBusy(false);
+    }
+  };
+
   const handleDeleteApiKey = async () => {
     if (apiKeyStatus?.hasApiKey && !window.confirm("Delete the current OpenSubsonic API key? Mobile apps using it will stop connecting.")) {
       return;
@@ -4711,6 +4738,7 @@ export const App = () => {
                 onScanLibraryRoot={handleFolderScan}
                 onScanBookRoot={handleFolderScan}
                 onRunMobileCoverJobNow={handleRunMobileCoverJobNow}
+                onRunFolderScanNow={handleRunFolderScanJobNow}
                 onClose={() => {
                   setError(null);
                   navigateToView("home");
@@ -5005,6 +5033,7 @@ export const App = () => {
                   onScanLibraryRoot={handleFolderScan}
                   onScanBookRoot={handleFolderScan}
                   onRunMobileCoverJobNow={handleRunMobileCoverJobNow}
+                  onRunFolderScanNow={handleRunFolderScanJobNow}
                   onClose={() => navigateToView("home")}
                   title="Settings"
                   description="Manage folders, scan behavior, scheduled jobs, and running build information."

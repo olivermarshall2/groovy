@@ -168,6 +168,11 @@ export const runMobileCoverArtJobNow = () =>
     method: "POST"
   });
 
+export const runFolderScanJobNow = () =>
+  sendJson<{ accepted: boolean; alreadyRunning: boolean; jobs: AppBootstrap["jobs"] }>("/api/app/jobs/folder-scan/run-now", {
+    method: "POST"
+  });
+
 export const fetchUserApiKeyStatus = () => getJson<UserApiKeyStatus>("/api/app/api-key");
 
 export const generateUserApiKey = () =>

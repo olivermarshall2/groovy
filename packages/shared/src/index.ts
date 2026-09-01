@@ -162,21 +162,21 @@ export type AppUser = {
 export type AppSettings = {
   libraryRoots: string[];
   bookRoots: string[];
-  scanIntervalMinutes: number;
+  folderScanCron: string;
   queueAlbumTracksOnPlay: boolean;
   promptBeforeReplacingQueueOnPlay: boolean;
   showEntityMetadataOnHeroImage: boolean;
   mobileOptimizedCoversEnabled: boolean;
-  mobileOptimizedCoverJobTime: string;
+  mobileOptimizedCoverJobCron: string;
 };
 
 export type ScheduledJobStatus = {
-  id: "mobile-cover-art";
+  id: "folder-scan" | "mobile-cover-art";
   label: string;
   description: string;
   isEnabled: boolean;
   isRunning: boolean;
-  scheduleTime: string | null;
+  cronExpression: string | null;
   processedItems: number;
   totalItems: number;
   progressPercent: number;

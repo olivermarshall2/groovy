@@ -6,11 +6,11 @@ import { normalizeMediaPath } from "../storage/ids.js";
 import { persistBookStateSidecar, restoreBookStateSidecars } from "./book-state-sidecar.js";
 import { getFolderCoverArtModifiedAt, readAudioMetadata, readFolderCoverArt } from "./tag-reader.js";
 import { syncLibraryArtifacts, type ScannedTrackArtifact } from "./library-artifacts.js";
+import { cronMatches, getCronMinuteKey } from "./cron-schedule.js";
 
 type ScanReason = "startup" | "scheduled" | "manual";
 
 type ScannerDependencies = {
-  defaultScanIntervalMinutes: number;
   repository: LibraryRepository;
   discogsAuth: { userToken: string | null; consumerKey: string | null; consumerSecret: string | null } | null;
 };
@@ -65,10 +65,11 @@ const areByteArraysEqual = (left: Uint8Array | null | undefined, right: Uint8Arr
   return true;
 };
 
-export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsAuth }: ScannerDependencies) => {
+export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) => {
   let timer: NodeJS.Timeout | undefined;
   let activeScan: Promise<void> | null = null;
   let queuedReason: ScanReason | null = null;
+  let lastScheduledMinute: string | null = null;
   const seenPaths = new Set<string>();
   const status: ScanStatus = {
     isScanning: false,
@@ -655,12 +656,19 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
   };
 
   const schedule = () => {
-    const settings = repository.getAppSettings();
-    const intervalMinutes = settings.scanIntervalMinutes || defaultScanIntervalMinutes;
-    const intervalMs = intervalMinutes * 60_000;
+    const tick = () => {
+      const now = new Date();
+      const minuteKey = getCronMinuteKey(now);
+
+      if (minuteKey !== lastScheduledMinute && cronMatches(repository.getAppSettings().folderScanCron, now)) {
+        lastScheduledMinute = minuteKey;
+        startScan("scheduled");
+      }
+    };
+
     timer = setInterval(() => {
-      startScan("scheduled");
-    }, intervalMs);
+      tick();
+    }, 30_000);
   };
 
   const resetSchedule = () => {
@@ -669,6 +677,7 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
       timer = undefined;
     }
 
+    lastScheduledMinute = getCronMinuteKey();
     schedule();
   };
 
@@ -680,6 +689,7 @@ export const createScanner = ({ defaultScanIntervalMinutes, repository, discogsA
         void runOnce("startup");
       }
 
+      lastScheduledMinute = getCronMinuteKey();
       schedule();
     },
     async stop() {

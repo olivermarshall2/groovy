@@ -628,8 +628,9 @@ export const createLibraryRepository = (databasePath: string) => {
         upsertSetting.run("bookRoots", JSON.stringify(defaultSettings.bookRoots));
       }
 
-      if (!rows.find((row) => row.key === "scanIntervalMinutes")) {
-        upsertSetting.run("scanIntervalMinutes", String(defaultSettings.scanIntervalMinutes));
+      if (!rows.find((row) => row.key === "folderScanCron")) {
+        const intervalMinutes = Number(rows.find((row) => row.key === "scanIntervalMinutes")?.value ?? "15");
+        upsertSetting.run("folderScanCron", `*/${Number.isFinite(intervalMinutes) && intervalMinutes > 0 ? intervalMinutes : 15} * * * *`);
       }
 
       if (!rows.find((row) => row.key === "queueAlbumTracksOnPlay")) {
@@ -648,8 +649,10 @@ export const createLibraryRepository = (databasePath: string) => {
         upsertSetting.run("mobileOptimizedCoversEnabled", String(defaultSettings.mobileOptimizedCoversEnabled));
       }
 
-      if (!rows.find((row) => row.key === "mobileOptimizedCoverJobTime")) {
-        upsertSetting.run("mobileOptimizedCoverJobTime", defaultSettings.mobileOptimizedCoverJobTime);
+      if (!rows.find((row) => row.key === "mobileOptimizedCoverJobCron")) {
+        const legacyTime = rows.find((row) => row.key === "mobileOptimizedCoverJobTime")?.value ?? "03:00";
+        const [hours, minutes] = legacyTime.split(":");
+        upsertSetting.run("mobileOptimizedCoverJobCron", `${Number(minutes) || 0} ${Number(hours) || 3} * * *`);
       }
     },
     getAppSettings(): AppSettings {
@@ -659,23 +662,23 @@ export const createLibraryRepository = (databasePath: string) => {
       return {
         libraryRoots: parseJsonSetting<string[]>(settingsMap.get("libraryRoots"), []),
         bookRoots: parseJsonSetting<string[]>(settingsMap.get("bookRoots"), []),
-        scanIntervalMinutes: Number(settingsMap.get("scanIntervalMinutes") ?? "15"),
+        folderScanCron: settingsMap.get("folderScanCron") ?? "*/15 * * * *",
         queueAlbumTracksOnPlay: parseBooleanSetting(settingsMap.get("queueAlbumTracksOnPlay"), true),
         promptBeforeReplacingQueueOnPlay: parseBooleanSetting(settingsMap.get("promptBeforeReplacingQueueOnPlay"), true),
         showEntityMetadataOnHeroImage: parseBooleanSetting(settingsMap.get("showEntityMetadataOnHeroImage"), false),
         mobileOptimizedCoversEnabled: parseBooleanSetting(settingsMap.get("mobileOptimizedCoversEnabled"), true),
-        mobileOptimizedCoverJobTime: settingsMap.get("mobileOptimizedCoverJobTime") ?? "03:00"
+        mobileOptimizedCoverJobCron: settingsMap.get("mobileOptimizedCoverJobCron") ?? "0 3 * * *"
       };
     },
     updateAppSettings(settings: AppSettings) {
       upsertSetting.run("libraryRoots", JSON.stringify(settings.libraryRoots));
       upsertSetting.run("bookRoots", JSON.stringify(settings.bookRoots));
-      upsertSetting.run("scanIntervalMinutes", String(settings.scanIntervalMinutes));
+      upsertSetting.run("folderScanCron", settings.folderScanCron);
       upsertSetting.run("queueAlbumTracksOnPlay", String(settings.queueAlbumTracksOnPlay));
       upsertSetting.run("promptBeforeReplacingQueueOnPlay", String(settings.promptBeforeReplacingQueueOnPlay));
       upsertSetting.run("showEntityMetadataOnHeroImage", String(settings.showEntityMetadataOnHeroImage));
       upsertSetting.run("mobileOptimizedCoversEnabled", String(settings.mobileOptimizedCoversEnabled));
-      upsertSetting.run("mobileOptimizedCoverJobTime", settings.mobileOptimizedCoverJobTime);
+      upsertSetting.run("mobileOptimizedCoverJobCron", settings.mobileOptimizedCoverJobCron);
     },
     hasUsers() {
       const row = selectUserCount.get() as { total: number };

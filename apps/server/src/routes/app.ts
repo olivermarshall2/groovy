@@ -6,17 +6,44 @@ import rootPackageJson from "../../../../package.json" with { type: "json" };
 import serverPackageJson from "../../package.json" with { type: "json" };
 import webPackageJson from "../../../web/package.json" with { type: "json" };
 import sharedPackageJson from "../../../../packages/shared/package.json" with { type: "json" };
+import { isValidCronExpression } from "../services/cron-schedule.js";
 
 const settingsSchema = z.object({
   libraryRoots: z.array(z.string().trim().min(1)).min(1),
   bookRoots: z.array(z.string().trim().min(1)).default([]),
-  scanIntervalMinutes: z.number().int().positive().max(1440).default(15),
+  folderScanCron: z.string().trim().refine(isValidCronExpression, "Use a valid five-field cron expression.").default("*/15 * * * *"),
   queueAlbumTracksOnPlay: z.boolean().default(true),
   promptBeforeReplacingQueueOnPlay: z.boolean().default(true),
   showEntityMetadataOnHeroImage: z.boolean().default(false),
   mobileOptimizedCoversEnabled: z.boolean().default(true),
-  mobileOptimizedCoverJobTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).default("03:00")
+  mobileOptimizedCoverJobCron: z.string().trim().refine(isValidCronExpression, "Use a valid five-field cron expression.").default("0 3 * * *")
 });
+
+const getJobsStatus = (server: FastifyInstance) => {
+  const scan = server.appContext.scanner.getStatus();
+  const settings = server.appContext.repository.getAppSettings();
+
+  return {
+    scheduled: [
+      {
+        id: "folder-scan" as const,
+        label: "Folder Scan",
+        description: "Scan the configured Music and Book folders for new or changed media and artwork.",
+        isEnabled: true,
+        isRunning: scan.isScanning,
+        cronExpression: settings.folderScanCron,
+        processedItems: scan.processedFiles,
+        totalItems: scan.totalFiles,
+        progressPercent: scan.progressPercent,
+        currentItemPath: scan.currentFilePath,
+        lastStartedAt: scan.lastStartedAt,
+        lastCompletedAt: scan.lastCompletedAt,
+        lastError: scan.recentErrors[0]?.message ?? null
+      },
+      ...server.appContext.mobileCoverJobs.getStatus().scheduled
+    ]
+  };
+};
 
 const buildApiKeyStatus = (server: FastifyInstance, request: FastifyRequest, userId: string) => {
   const protocolHeader = request.headers["x-forwarded-proto"];
@@ -76,7 +103,7 @@ export const registerAppRoutes = async (server: FastifyInstance) => {
       settings,
       needsLibrarySetup: settings.libraryRoots.length === 0,
       scan: server.appContext.scanner.getStatus(),
-      jobs: server.appContext.mobileCoverJobs.getStatus(),
+      jobs: getJobsStatus(server),
       build: {
         appVersion: rootPackageJson.version,
         serverVersion: serverPackageJson.version,
@@ -113,7 +140,7 @@ export const registerAppRoutes = async (server: FastifyInstance) => {
 
   server.get("/api/app/jobs", async (request) => {
     requireAuth(server, request);
-    return server.appContext.mobileCoverJobs.getStatus();
+    return getJobsStatus(server);
   });
 
   server.post("/api/app/jobs/mobile-cover-art/run-now", async (request) => {
@@ -122,7 +149,17 @@ export const registerAppRoutes = async (server: FastifyInstance) => {
     return {
       accepted: true,
       alreadyRunning: !accepted,
-      jobs: server.appContext.mobileCoverJobs.getStatus()
+      jobs: getJobsStatus(server)
+    };
+  });
+
+  server.post("/api/app/jobs/folder-scan/run-now", async (request) => {
+    requireAuth(server, request);
+    const accepted = server.appContext.scanner.startScan("manual");
+    return {
+      accepted,
+      alreadyRunning: !accepted,
+      jobs: getJobsStatus(server)
     };
   });
 

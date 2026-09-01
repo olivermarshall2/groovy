@@ -9,15 +9,14 @@ export const createAppContext = () => {
   repository.ensureDefaultSettings({
     libraryRoots: config.defaultLibraryRoots,
     bookRoots: config.defaultBookRoots,
-    scanIntervalMinutes: config.defaultScanIntervalMinutes,
+    folderScanCron: `*/${config.defaultScanIntervalMinutes} * * * *`,
     queueAlbumTracksOnPlay: true,
     promptBeforeReplacingQueueOnPlay: true,
     showEntityMetadataOnHeroImage: true,
     mobileOptimizedCoversEnabled: true,
-    mobileOptimizedCoverJobTime: "03:00"
+    mobileOptimizedCoverJobCron: "0 3 * * *"
   });
   const scanner = createScanner({
-    defaultScanIntervalMinutes: config.defaultScanIntervalMinutes,
     repository,
     discogsAuth: config.discogs
   });
