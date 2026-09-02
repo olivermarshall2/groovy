@@ -193,12 +193,14 @@ type LibraryArtistsSortOption = "artist" | "album-count" | "track-count" | "leng
 type AlbumTagsEditorState = {
   albumId: string;
   albumName: string;
+  folderPath: string;
   values: AlbumTagsPayload;
 };
 
 type TrackTagsEditorState = {
   trackId: string;
   contextLabel: string;
+  folderPath: string;
   values: TrackTagsPayload;
 };
 
@@ -233,6 +235,8 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   mobileOptimizedCoversEnabled: true,
   mobileOptimizedCoverJobCron: "0 3 * * *"
 };
+
+const getMediaFolderPath = (filePath: string | null | undefined) => filePath?.replace(/[\\/][^\\/]+$/, "") ?? "Unknown folder";
 
 const normalizeAppSettings = (settings: Partial<AppSettings> | null | undefined): AppSettings => ({
   libraryRoots: settings?.libraryRoots ?? [],
@@ -1389,6 +1393,7 @@ const AlbumBioDialog = ({
 
 const AlbumTagsDialog = ({
   albumName,
+  folderPath,
   values,
   busy,
   error,
@@ -1397,6 +1402,7 @@ const AlbumTagsDialog = ({
   onSave
 }: {
   albumName: string;
+  folderPath: string;
   values: AlbumTagsPayload;
   busy: boolean;
   error: string | null;
@@ -1411,6 +1417,7 @@ const AlbumTagsDialog = ({
           <p className="eyebrow">Edit ID3 Tags</p>
           <h2>{albumName}</h2>
           <p>Update the album-wide tags across every track in this album.</p>
+          <p className="tag-editor-path" title={folderPath}>Folder: {folderPath}</p>
         </div>
         <button type="button" className="close-button" onClick={onClose} aria-label="Close album tag editor">
           <X className="h-4 w-4" />
@@ -1464,6 +1471,7 @@ const AlbumTagsDialog = ({
 
 const TrackTagsDialog = ({
   contextLabel,
+  folderPath,
   values,
   busy,
   error,
@@ -1472,6 +1480,7 @@ const TrackTagsDialog = ({
   onSave
 }: {
   contextLabel: string;
+  folderPath: string;
   values: TrackTagsPayload;
   busy: boolean;
   error: string | null;
@@ -1486,6 +1495,7 @@ const TrackTagsDialog = ({
           <p className="eyebrow">Edit ID3 Tags</p>
           <h2>{contextLabel}</h2>
           <p>Update the track-specific tags without changing the album-level metadata.</p>
+          <p className="tag-editor-path" title={folderPath}>Folder: {folderPath}</p>
         </div>
         <button type="button" className="close-button" onClick={onClose} aria-label="Close track tag editor">
           <X className="h-4 w-4" />
@@ -3615,6 +3625,7 @@ export const App = () => {
     setAlbumTagsEditorState({
       albumId: activeAlbum.id,
       albumName: activeAlbum.name,
+      folderPath: getMediaFolderPath(firstTrack?.filePath),
       values: {
         artist: firstTrack?.artist ?? "",
         albumArtist: firstTrack?.albumArtist ?? activeAlbum.artist ?? "",
@@ -3630,6 +3641,7 @@ export const App = () => {
     setTrackTagsEditorState({
       trackId: track.id,
       contextLabel: track.title ?? track.album ?? "Track",
+      folderPath: getMediaFolderPath(track.filePath),
       values: {
         title: track.title ?? "",
         trackNumber: String(track.trackNumber ?? ""),
@@ -4772,6 +4784,7 @@ export const App = () => {
       {albumTagsEditorState ? (
         <AlbumTagsDialog
           albumName={albumTagsEditorState.albumName}
+          folderPath={albumTagsEditorState.folderPath}
           values={albumTagsEditorState.values}
           busy={albumTagsSaving}
           error={albumTagsError}
@@ -4801,6 +4814,7 @@ export const App = () => {
       {trackTagsEditorState ? (
         <TrackTagsDialog
           contextLabel={trackTagsEditorState.contextLabel}
+          folderPath={trackTagsEditorState.folderPath}
           values={trackTagsEditorState.values}
           busy={trackTagsSaving}
           error={trackTagsError}

@@ -2,6 +2,29 @@
 
 All notable project changes should be recorded here. Keep the newest entry at the top.
 
+## 0.31.0 - 2026-09-02
+
+### Fixed
+
+- Prevented an incomplete network-folder scan from deleting the existing catalogue beneath that root. Folder and full-library scans now prune missing tracks only after their relevant root was read and statted successfully, retaining Books when a transient `/books` share error occurs.
+- Bumped the server build version to `0.1.4`.
+
+## 0.30.0 - 2026-09-02
+
+### Fixed
+
+- Kept Android's cached library visible when the server responds with an empty but successful snapshot during Docker startup or refresh, without reporting a false connectivity failure.
+- Added two bounded, quiet background retries when the server returns empty collections, including while its library scan is still starting.
+- Enhanced Android request diagnostics with the real authentication state and response payload counts, so a future empty-server response is immediately distinguishable from a client parsing or connection issue.
+
+## 0.29.0 - 2026-09-02
+
+### Fixed
+
+- Persist Android library collections independently after a partial server refresh. Successfully fetched Books are now saved and shown even when large Tracks, Playlists, or Likes requests time out.
+- Updated the native media-browser cache from the same partial snapshot, so Android Auto and Bluetooth browsing no longer report zero books after a successful Books response.
+- Added diagnostics that record when live books are applied and when a partial library snapshot is retained.
+
 ## 0.28.0 - 2026-09-01
 
 ### Fixed
@@ -28,6 +51,8 @@ All notable project changes should be recorded here. Keep the newest entry at th
 
 ### Changed
 
+- Added the full containing album or book folder path to both album-wide and track-level Edit ID3 Tags dialogs.
+- Bumped the web build version to `0.1.9`.
 - Replaced interval and daily-time scheduling with standard five-field cron expressions. Settings now presents `Folder Scan` and `Generate mobile cover art` as Jobs with individual cron schedules and `Run Now` actions; folder paths remain in Folders with a link to Jobs. Existing schedules migrate automatically to equivalent cron expressions.
 - Stopped ID3 tag edits from reloading the full web library: album edits update only the affected album and track cache entries, while track edits refresh only the current album or book detail.
 - Prevented a Folder Scan cron match from launching immediately after a server restart or schedule reset.

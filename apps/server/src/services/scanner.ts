@@ -189,7 +189,7 @@ export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) 
       existingTracksByPath?: Map<string, TrackRecord>;
       changedArtifactFolders?: Set<string>;
     }
-  ) => {
+  ): Promise<boolean> => {
     const folderCoverArtCache = options?.folderCoverArtCache ?? new Map<string, Awaited<ReturnType<typeof readFolderCoverArt>>>();
     const folderCoverArtModifiedCache = options?.folderCoverArtModifiedCache ?? new Map<string, string | null>();
     let entries;
@@ -199,8 +199,10 @@ export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) 
       entries = await readDirectoryEntries(root);
     } catch (error) {
       pushError(root, error instanceof Error ? error.message : "Failed to read directory");
-      return;
+      return false;
     }
+
+    let completedSuccessfully = true;
 
     const audioEntries = entries.filter(
       (entry) => entry.isFile() && AUDIO_EXTENSIONS.has(path.extname(entry.name).toLowerCase())
@@ -219,13 +221,14 @@ export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) 
       const fullPath = path.join(root, entry.name);
 
       if (entry.isDirectory()) {
-        await scanFolder(fullPath, libraryRoot, collectedTracks, seenPathsSet, {
+        const childCompletedSuccessfully = await scanFolder(fullPath, libraryRoot, collectedTracks, seenPathsSet, {
           forceMediaKind: options?.forceMediaKind,
           folderCoverArtCache,
           folderCoverArtModifiedCache,
           existingTracksByPath: options?.existingTracksByPath,
           changedArtifactFolders: options?.changedArtifactFolders
         });
+        completedSuccessfully = completedSuccessfully && childCompletedSuccessfully;
         continue;
       }
 
@@ -246,6 +249,7 @@ export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) 
         fileStats = await readFileStats(fullPath);
       } catch (error) {
         pushError(fullPath, error instanceof Error ? error.message : "Failed to stat file");
+        completedSuccessfully = false;
         status.processedFiles += 1;
         updateProgress();
         continue;
@@ -402,6 +406,8 @@ export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) 
       status.processedFiles += 1;
       updateProgress();
     }
+
+    return completedSuccessfully;
   };
 
   const runScan = async (reason: ScanReason) => {
@@ -422,11 +428,13 @@ export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) 
 
     try {
       const scanRoots = uniqueRoots([...settings.libraryRoots, ...settings.bookRoots]);
+      const completedScanRoots: string[] = [];
 
       for (const root of scanRoots) {
         try {
           await access(root);
-        } catch {
+        } catch (error) {
+          pushError(root, error instanceof Error ? error.message : "Failed to access scan root");
           continue;
         }
 
@@ -436,13 +444,17 @@ export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) 
           repository.listTracksInFolder(root).map((track) => [normalizeMediaPath(track.filePath), track] as const)
         );
         const changedArtifactFolders = new Set<string>();
-        await scanFolder(root, root, collectedTracks, seenPaths, {
+        const rootCompletedSuccessfully = await scanFolder(root, root, collectedTracks, seenPaths, {
           forceMediaKind: isBookRoot ? "book" : "music",
           folderCoverArtCache: new Map(),
           folderCoverArtModifiedCache: new Map(),
           existingTracksByPath,
           changedArtifactFolders
         });
+
+        if (rootCompletedSuccessfully) {
+          completedScanRoots.push(root);
+        }
 
         if (!isBookRoot) {
           for (const [trackedPath, trackedTrack] of existingTracksByPath.entries()) {
@@ -469,8 +481,8 @@ export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) 
         }
       }
 
-      setPhase("finalizing", null, "Removing missing tracks from the database");
-      repository.pruneMissingTracks(scanRoots, seenPaths);
+      setPhase("finalizing", null, "Removing missing tracks from completed scan roots");
+      repository.pruneMissingTracks(completedScanRoots, seenPaths);
       setPhase("finalizing", "book-state-sidecars", "Restoring book progress sidecars");
       await restoreBookStateSidecars(repository);
       const trackedBookIds = repository.listTrackedBookIds();
@@ -551,7 +563,7 @@ export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) 
           .map((track) => track.bookId)
           .filter((bookId): bookId is string => Boolean(bookId))
       );
-      await scanFolder(folderPath, folderPath, collectedTracks, seenFolderPaths, {
+      const folderCompletedSuccessfully = await scanFolder(folderPath, folderPath, collectedTracks, seenFolderPaths, {
         forceMediaKind: isBookFolderScan ? "book" : "music",
         folderCoverArtCache: new Map(),
         folderCoverArtModifiedCache: new Map(),
@@ -588,8 +600,12 @@ export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) 
           });
         }
       }
-      setPhase("finalizing", folderPath, "Removing missing tracks from the scanned folder");
-      repository.pruneMissingTracksInFolder(folderPath, seenFolderPaths);
+      if (folderCompletedSuccessfully) {
+        setPhase("finalizing", folderPath, "Removing missing tracks from the scanned folder");
+        repository.pruneMissingTracksInFolder(folderPath, seenFolderPaths);
+      } else {
+        setPhase("finalizing", folderPath, "Skipping deletion because the folder scan was incomplete");
+      }
 
       if (isBookFolderScan && affectedBookIds.size > 0) {
         const trackedBookIds = [...affectedBookIds];

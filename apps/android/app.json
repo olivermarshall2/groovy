@@ -3,7 +3,7 @@
     "name": "Groovy",
     "slug": "mp3-platform-android",
     "scheme": "mp3platform",
-    "version": "0.28.0",
+    "version": "0.30.0",
     "icon": "./assets/groovy-icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",

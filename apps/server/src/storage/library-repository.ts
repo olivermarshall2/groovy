@@ -1183,17 +1183,15 @@ export const createLibraryRepository = (databasePath: string) => {
     recordScan(scan: ScanRecord) {
       insertScan.run(scan.completedAt, scan.reason);
     },
-    pruneMissingTracks(libraryRoots: string[], seenPaths: Set<string>) {
-      const normalizedRoots = libraryRoots.map((root) => normalizeMediaPath(root));
+    pruneMissingTracks(completedRoots: string[], seenPaths: Set<string>) {
+      const normalizedRoots = completedRoots.map((root) => normalizeMediaPath(root));
       const rows = selectAllTrackedPaths.all() as Array<{ normalized_file_path: string }>;
 
       for (const row of rows) {
         const trackedPath = row.normalized_file_path;
-        const belongsToCurrentRoots =
-          normalizedRoots.length === 0 ||
-          normalizedRoots.some((root) => trackedPath.startsWith(root));
+        const belongsToCompletedRoot = normalizedRoots.some((root) => trackedPath.startsWith(root));
 
-        if (!belongsToCurrentRoots || !seenPaths.has(trackedPath)) {
+        if (belongsToCompletedRoot && !seenPaths.has(trackedPath)) {
           deleteTrackByNormalizedPath.run(trackedPath);
         }
       }

@@ -52,12 +52,31 @@ export const isApiNetworkError = (error: unknown): error is ApiError =>
 
 const normalizeServerUrl = (value: string) => value.trim().replace(/\/+$/, "");
 
-const summarizeRequest = (path: string, serverUrl: string, init?: RequestInit) => ({
+const summarizeRequest = (path: string, serverUrl: string, token: string | null, init?: RequestInit) => ({
   path,
   serverUrl: normalizeServerUrl(serverUrl),
   method: init?.method ?? "GET",
-  hasAuthToken: Boolean(init?.headers && new Headers(init.headers).get("Authorization"))
+  // Auth is normally added by buildHeaders(), not by each individual endpoint call.
+  hasAuthToken: Boolean(token)
 });
+
+const summarizeJsonPayload = (payload: unknown) => {
+  if (Array.isArray(payload)) {
+    return { payloadKind: "array", itemCount: payload.length };
+  }
+
+  if (payload && typeof payload === "object") {
+    const record = payload as Record<string, unknown>;
+    return {
+      payloadKind: "object",
+      topLevelKeys: Object.keys(record).slice(0, 12),
+      trackCount: typeof record.trackCount === "number" ? record.trackCount : null,
+      lastScanAt: typeof record.lastScanAt === "string" ? record.lastScanAt : null
+    };
+  }
+
+  return { payloadKind: typeof payload };
+};
 
 const getRequestTimeoutMs = (path: string) => {
   if (path === "/api/library/tracks") {
@@ -188,7 +207,7 @@ const requestJson = async <T>(options: ApiOptions, path: string, init?: RequestI
     });
   } catch (error) {
     await logError("API request failed before response", error, {
-      ...summarizeRequest(path, options.serverUrl, init),
+      ...summarizeRequest(path, options.serverUrl, options.token, init),
       requestUrl,
       timeoutMs,
       durationMs: Date.now() - startedAt,
@@ -210,7 +229,7 @@ const requestJson = async <T>(options: ApiOptions, path: string, init?: RequestI
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     await logInfo("API request returned non-OK response", {
-      ...summarizeRequest(path, options.serverUrl, init),
+      ...summarizeRequest(path, options.serverUrl, options.token, init),
       requestUrl,
       timeoutMs,
       durationMs: Date.now() - startedAt,
@@ -230,7 +249,7 @@ const requestJson = async <T>(options: ApiOptions, path: string, init?: RequestI
 
   if (response.status === 204) {
     await logInfo("API request completed", {
-      ...summarizeRequest(path, options.serverUrl, init),
+      ...summarizeRequest(path, options.serverUrl, options.token, init),
       requestUrl,
       timeoutMs,
       durationMs: Date.now() - startedAt,
@@ -242,16 +261,17 @@ const requestJson = async <T>(options: ApiOptions, path: string, init?: RequestI
   try {
     const payload = await response.json() as T;
     await logInfo("API request completed", {
-      ...summarizeRequest(path, options.serverUrl, init),
+      ...summarizeRequest(path, options.serverUrl, options.token, init),
       requestUrl,
       timeoutMs,
       durationMs: Date.now() - startedAt,
-      statusCode: response.status
+      statusCode: response.status,
+      ...summarizeJsonPayload(payload)
     });
     return payload;
   } catch (error) {
     await logError("API response JSON parse failed", error, {
-      ...summarizeRequest(path, options.serverUrl, init),
+      ...summarizeRequest(path, options.serverUrl, options.token, init),
       requestUrl,
       timeoutMs,
       durationMs: Date.now() - startedAt,

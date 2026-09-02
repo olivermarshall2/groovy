@@ -1032,6 +1032,13 @@ button {
   white-space: nowrap;
 }
 
+.tag-editor-path {
+  color: var(--muted);
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
 .album-grid {
   display: grid;
   gap: 1rem;

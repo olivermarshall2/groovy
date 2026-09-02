@@ -697,6 +697,7 @@ const AppBody = () => {
   const notificationPermissionRequestedRef = useRef(false);
   const playbackCacheDownloadsRef = useRef<Set<string>>(new Set());
   const statusNoticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const emptyLibraryRefreshRetryCountRef = useRef(0);
   const mediaArtworkUriCacheRef = useRef<Record<string, string>>({});
   const lastBluetoothMetadataPushRef = useRef<{
     trackId: string;
@@ -2277,9 +2278,31 @@ const AppBody = () => {
           offlineBundleCount: Object.keys(offlineLibraryRef.current.bundles).length
         });
 
-        if (options?.notifyOnFailure) {
-          showStatusNotice("Server responded with an empty library snapshot. Keeping your cached library.");
+        if (emptyLibraryRefreshRetryCountRef.current < 2) {
+          emptyLibraryRefreshRetryCountRef.current += 1;
+          const retryAttempt = emptyLibraryRefreshRetryCountRef.current;
+          const retryDelayMs = retryAttempt * 2_000;
+
+          await logInfo("Server returned an empty library snapshot; scheduling background retry", {
+            serverUrl,
+            retryAttempt,
+            retryDelayMs,
+            summaryTrackCount: summary?.trackCount ?? null
+          });
+
+          // Docker can accept requests before its library volume is ready. Preserve what is
+          // on-screen and retry quietly rather than incorrectly reporting an offline server.
+          setTimeout(() => {
+            void refreshLibrary({ showBusy: false, notifyOnFailure: false, refreshOfflineCovers: false });
+          }, retryDelayMs);
+        } else {
+          await logInfo("Empty library snapshot retries exhausted; retaining cached Android library", {
+            serverUrl,
+            summaryTrackCount: summary?.trackCount ?? null
+          });
         }
+      } else {
+        emptyLibraryRefreshRetryCountRef.current = 0;
       }
 
       if (summary || nextAlbums || nextBooks || nextPlaylists || nextTracks || likes) {
@@ -2289,8 +2312,18 @@ const AppBody = () => {
       if (nextAlbums && !suspiciousEmptyLibraryResponse) {
         setAlbums(nextAlbums);
       }
-      if (resolvedBooks && !suspiciousEmptyLibraryResponse && !preserveExistingBooks) {
-        setBooks(mergeBooksWithLocalProgress(resolvedBooks, persistedBookProgress));
+      const mergedLiveBooks =
+        resolvedBooks && !suspiciousEmptyLibraryResponse && !preserveExistingBooks
+          ? mergeBooksWithLocalProgress(resolvedBooks, persistedBookProgress)
+          : null;
+
+      if (mergedLiveBooks) {
+        setBooks(mergedLiveBooks);
+        await logInfo("Live books collection applied", {
+          serverUrl,
+          bookCount: mergedLiveBooks.length,
+          source: nextBooks ? "books-endpoint" : "tracks-derived"
+        });
       }
       if (nextPlaylists && !suspiciousEmptyLibraryResponse) {
         setPlaylists(nextPlaylists);
@@ -2305,16 +2338,22 @@ const AppBody = () => {
         setSummaryText(summary.lastScanAt ? `${summary.trackCount} tracks indexed` : "Scan your library to begin");
       }
 
-      if (summary && nextAlbums && resolvedBooks && nextPlaylists && nextTracks && likes && !suspiciousEmptyLibraryResponse && !preserveExistingBooks) {
-        const mergedBooks = mergeBooksWithLocalProgress(resolvedBooks, persistedBookProgress);
+      // Persist every successfully refreshed collection. A large library can make one endpoint
+      // time out while Books itself succeeds; waiting for an all-or-nothing refresh discarded
+      // those live books on the next app launch.
+      if (!suspiciousEmptyLibraryResponse && (nextAlbums || mergedLiveBooks || nextPlaylists || nextTracks || likes)) {
+        const previousCache = libraryCacheSnapshotRef.current;
         const nextLibraryCache = {
-          albums: nextAlbums,
-          books: mergedBooks,
-          playlists: nextPlaylists,
-          tracks: nextTracks,
-          likedTrackIds: likes.trackIds,
-          summaryText: summary.lastScanAt ? `${summary.trackCount} tracks indexed` : "Scan your library to begin",
-          lastScanAt: summary.lastScanAt
+          albums: nextAlbums ?? previousCache?.albums ?? albums,
+          books: mergedLiveBooks ?? previousCache?.books ?? books,
+          playlists: nextPlaylists ?? previousCache?.playlists ?? playlists,
+          tracks: nextTracks ?? previousCache?.tracks ?? tracks,
+          likedTrackIds: likes?.trackIds ?? previousCache?.likedTrackIds ?? Array.from(likedTrackIds),
+          summaryText:
+            summary?.lastScanAt
+              ? `${summary.trackCount} tracks indexed`
+              : previousCache?.summaryText ?? summaryText,
+          lastScanAt: summary?.lastScanAt ?? previousCache?.lastScanAt ?? lastLibraryScanAt
         } satisfies PersistedLibraryCache;
         await AsyncStorage.setItem(
           LIBRARY_CACHE_KEY,
@@ -2323,7 +2362,17 @@ const AppBody = () => {
         libraryCacheSnapshotRef.current = nextLibraryCache;
         setLibraryCacheSnapshot(nextLibraryCache);
         await syncNativeMediaBrowserLibraryCache(nextLibraryCache);
-        setLastLibraryScanAt(summary.lastScanAt);
+        if (summary?.lastScanAt) {
+          setLastLibraryScanAt(summary.lastScanAt);
+        }
+        await logInfo("Partial library snapshot persisted", {
+          serverUrl,
+          successfulEndpoints: successes.map((result) => result.endpoint),
+          albumCount: nextLibraryCache.albums.length,
+          bookCount: nextLibraryCache.books.length,
+          playlistCount: nextLibraryCache.playlists.length,
+          trackCount: nextLibraryCache.tracks.length
+        });
       }
 
       if (resolvedBooks && !preserveExistingBooks) {
