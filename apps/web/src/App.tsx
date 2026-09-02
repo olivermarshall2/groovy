@@ -2254,6 +2254,7 @@ export const App = () => {
   const progressSaveRef = useRef<string>("");
   const routeRenderMeasureRef = useRef<{ routeKey: string; startedAt: number } | null>(null);
   const lastBootstrapSignatureRef = useRef<string | null>(null);
+  const lastCompletedScanRefreshRef = useRef<string | null>(null);
   const libraryDataRef = useRef<LibraryData | null>(null);
   const libraryCacheWriteTimerRef = useRef<number | null>(null);
   const trackHeavyDataLoadedRef = useRef(false);
@@ -2749,6 +2750,29 @@ export const App = () => {
 
     return () => window.clearInterval(intervalId);
   }, [bootstrap?.currentUser, bootstrap?.scan.isScanning, bootstrap?.jobs]);
+
+  useEffect(() => {
+    const completedAt = bootstrap?.scan.lastCompletedAt;
+
+    if (!bootstrap?.currentUser || bootstrap.scan.isScanning || !completedAt) {
+      return;
+    }
+
+    if (lastCompletedScanRefreshRef.current === null) {
+      lastCompletedScanRefreshRef.current = completedAt;
+      return;
+    }
+
+    if (lastCompletedScanRefreshRef.current === completedAt) {
+      return;
+    }
+
+    lastCompletedScanRefreshRef.current = completedAt;
+    appendDebugLog("info", "Scan completed; refreshing library shell", completedAt);
+    void loadLibrary().catch((error) => {
+      appendDebugLog("error", "Post-scan library shell refresh failed", error instanceof Error ? error.message : "Unknown error");
+    });
+  }, [bootstrap?.currentUser, bootstrap?.scan.isScanning, bootstrap?.scan.lastCompletedAt]);
 
   useEffect(() => {
     currentTrackRef.current = currentTrack;

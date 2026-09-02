@@ -2,6 +2,13 @@
 
 All notable project changes should be recorded here. Keep the newest entry at the top.
 
+## 0.32.0 - 2026-09-02
+
+### Fixed
+
+- Refreshed the lightweight web library shell automatically when a folder scan completes, so Books and Authors repopulate in an already-open browser session without forcing the expensive track-heavy reload.
+- Bumped the web build version to `0.1.10`.
+
 ## 0.31.0 - 2026-09-02
 
 ### Fixed
