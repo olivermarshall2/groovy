@@ -698,6 +698,7 @@ const AppBody = () => {
   const playbackCacheDownloadsRef = useRef<Set<string>>(new Set());
   const statusNoticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const emptyLibraryRefreshRetryCountRef = useRef(0);
+  const libraryRefreshInFlightRef = useRef(false);
   const mediaArtworkUriCacheRef = useRef<Record<string, string>>({});
   const lastBluetoothMetadataPushRef = useRef<{
     trackId: string;
@@ -2112,6 +2113,16 @@ const AppBody = () => {
       return;
     }
 
+    if (libraryRefreshInFlightRef.current) {
+      await logInfo("Library refresh skipped because another refresh is already active", {
+        serverUrl,
+        notifyOnFailure: Boolean(options?.notifyOnFailure)
+      });
+      return;
+    }
+
+    libraryRefreshInFlightRef.current = true;
+
     const showBusy = options?.showBusy ?? true;
 
     if (showBusy) {
@@ -2126,14 +2137,9 @@ const AppBody = () => {
         notifyOnFailure: Boolean(options?.notifyOnFailure),
         refreshOfflineCovers: Boolean(options?.refreshOfflineCovers)
       });
-      const endpointResults = await Promise.all([
-        (async () => {
-          try {
-            return { endpoint: "bootstrap" as const, ok: true as const, value: await fetchBootstrap(apiOptions) };
-          } catch (error) {
-            return { endpoint: "bootstrap" as const, ok: false as const, error };
-          }
-        })(),
+      // Summary, Books, and Likes are small and keep user-specific state current. Do these
+      // first so routine pull-to-refresh avoids competing with the large tracks response.
+      const lightweightEndpointResults = await Promise.all([
         (async () => {
           try {
             return { endpoint: "summary" as const, ok: true as const, value: await fetchLibrarySummary(apiOptions) };
@@ -2143,16 +2149,45 @@ const AppBody = () => {
         })(),
         (async () => {
           try {
-            return { endpoint: "albums" as const, ok: true as const, value: await fetchAlbums(apiOptions) };
+            return { endpoint: "books" as const, ok: true as const, value: await fetchBooks(apiOptions) };
           } catch (error) {
-            return { endpoint: "albums" as const, ok: false as const, error };
+            return { endpoint: "books" as const, ok: false as const, error };
           }
         })(),
         (async () => {
           try {
-            return { endpoint: "books" as const, ok: true as const, value: await fetchBooks(apiOptions) };
+            return { endpoint: "likes" as const, ok: true as const, value: await fetchLikedTrackIds(apiOptions) };
           } catch (error) {
-            return { endpoint: "books" as const, ok: false as const, error };
+            return { endpoint: "likes" as const, ok: false as const, error };
+          }
+        })()
+      ]);
+      const lightweightSummary = lightweightEndpointResults.find((result) => result.endpoint === "summary" && result.ok)?.value ?? null;
+      const shouldFetchFullCatalog =
+        Boolean(lightweightSummary?.lastScanAt) && lightweightSummary?.lastScanAt !== lastLibraryScanAt;
+
+      if (!shouldFetchFullCatalog) {
+        await logInfo("Library scan is unchanged or unavailable; keeping cached catalogue and refreshing lightweight state", {
+          serverUrl,
+          lastKnownScanAt: lastLibraryScanAt,
+          serverScanAt: lightweightSummary?.lastScanAt ?? null,
+          summaryAvailable: Boolean(lightweightSummary)
+        });
+      }
+
+      const catalogEndpointResults = shouldFetchFullCatalog ? await Promise.all([
+        (async () => {
+          try {
+            return { endpoint: "bootstrap" as const, ok: true as const, value: await fetchBootstrap(apiOptions) };
+          } catch (error) {
+            return { endpoint: "bootstrap" as const, ok: false as const, error };
+          }
+        })(),
+        (async () => {
+          try {
+            return { endpoint: "albums" as const, ok: true as const, value: await fetchAlbums(apiOptions) };
+          } catch (error) {
+            return { endpoint: "albums" as const, ok: false as const, error };
           }
         })(),
         (async () => {
@@ -2169,14 +2204,8 @@ const AppBody = () => {
             return { endpoint: "tracks" as const, ok: false as const, error };
           }
         })(),
-        (async () => {
-          try {
-            return { endpoint: "likes" as const, ok: true as const, value: await fetchLikedTrackIds(apiOptions) };
-          } catch (error) {
-            return { endpoint: "likes" as const, ok: false as const, error };
-          }
-        })()
-      ]);
+      ]) : [];
+      const endpointResults = [...lightweightEndpointResults, ...catalogEndpointResults];
 
       const persistedBookProgress = await readPersistedBookProgress();
       const failures = endpointResults.filter((result) => !result.ok);
@@ -2460,6 +2489,7 @@ const AppBody = () => {
         );
       }
     } finally {
+      libraryRefreshInFlightRef.current = false;
       if (showBusy) {
         setBusy(false);
       }

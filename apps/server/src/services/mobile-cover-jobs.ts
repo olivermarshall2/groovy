@@ -57,6 +57,28 @@ const selectSourceCoverPath = async (folderPath: string) => {
 
 export const findMobileCoverPathForTrack = async (trackFilePath: string) => {
   const folderPath = path.dirname(trackFilePath);
+  const trackBaseName = path.basename(trackFilePath, path.extname(trackFilePath)).toLowerCase();
+
+  try {
+    const entries = await readdir(folderPath, { withFileTypes: true });
+    const hasTrackSpecificArtwork = entries.some((entry) => {
+      if (!entry.isFile()) {
+        return false;
+      }
+
+      const extension = path.extname(entry.name).toLowerCase();
+      return [".jpg", ".jpeg", ".png"].includes(extension) && path.basename(entry.name, extension).toLowerCase() === trackBaseName;
+    });
+
+    // A folder-level mobile derivative would be the wrong image for a track
+    // override. Returning null makes the route serve the matching original.
+    if (hasTrackSpecificArtwork) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+
   const mobileCoverPath = path.join(folderPath, MOBILE_COVER_FILE_NAME);
 
   try {

@@ -9,7 +9,7 @@ export type TrackMetadata = Omit<
 > & {
   coverArtMime: string | null;
   coverArtData: Uint8Array | null;
-  coverArtSource: "embedded" | "folder" | null;
+  coverArtSource: "embedded" | "folder" | "track" | null;
   musicBrainzReleaseId: string | null;
   musicBrainzArtistId: string | null;
   musicBrainzAlbumArtistId: string | null;
@@ -130,6 +130,43 @@ const listArtworkDirectories = (filePath: string, libraryRoot?: string) => {
   }
 
   return directories;
+};
+
+const getTrackArtworkCandidate = async (filePath: string, fileNames?: readonly string[]) => {
+  const baseName = path.basename(filePath, path.extname(filePath)).toLowerCase();
+  const names = fileNames ?? await readdir(path.dirname(filePath));
+  const candidateName = names.find((name) => {
+    const extension = path.extname(name).toLowerCase();
+    return IMAGE_EXTENSIONS.has(extension) && path.basename(name, extension).toLowerCase() === baseName;
+  });
+
+  return candidateName ? path.join(path.dirname(filePath), candidateName) : null;
+};
+
+export const readTrackCoverArt = async (filePath: string, fileNames?: readonly string[]) => {
+  try {
+    const candidatePath = await getTrackArtworkCandidate(filePath, fileNames);
+
+    if (!candidatePath) {
+      return null;
+    }
+
+    return {
+      mimeType: IMAGE_EXTENSIONS.get(path.extname(candidatePath).toLowerCase()) ?? "image/jpeg",
+      data: new Uint8Array(await readFile(candidatePath))
+    };
+  } catch {
+    return null;
+  }
+};
+
+export const getTrackCoverArtModifiedAt = async (filePath: string, fileNames?: readonly string[]) => {
+  try {
+    const candidatePath = await getTrackArtworkCandidate(filePath, fileNames);
+    return candidatePath ? (await stat(candidatePath)).mtime.toISOString() : null;
+  } catch {
+    return null;
+  }
 };
 
 export const readFolderCoverArt = async (filePath: string, libraryRoot?: string) => {
@@ -300,11 +337,12 @@ const inferBookMetadata = (filePath: string, metadata: ParsedMetadata, libraryRo
   };
 };
 
-export const readAudioMetadata = async (filePath: string, libraryRoot?: string): Promise<TrackMetadata> => {
+export const readAudioMetadata = async (filePath: string, libraryRoot?: string, fileNames?: readonly string[]): Promise<TrackMetadata> => {
   const parseFile = await loadParseFile();
   const metadata = await parseFile(filePath);
   const embeddedCoverArt = metadata.common.picture?.[0];
-  const folderCoverArt = embeddedCoverArt ? null : await readFolderCoverArt(filePath, libraryRoot);
+  const trackCoverArt = await readTrackCoverArt(filePath, fileNames);
+  const folderCoverArt = trackCoverArt || embeddedCoverArt ? null : await readFolderCoverArt(filePath, libraryRoot);
   const artists = toArray(metadata.common.artists);
   const nativeArtistValues = getNativeTagValues(metadata, ARTIST_NATIVE_TAG_KEYS);
   const nativeAlbumArtistValues = getNativeTagValues(metadata, ALBUM_ARTIST_NATIVE_TAG_KEYS);
@@ -339,9 +377,9 @@ export const readAudioMetadata = async (filePath: string, libraryRoot?: string):
     durationSeconds: metadata.format.duration ? Math.round(metadata.format.duration) : null,
     bitrate: metadata.format.bitrate ?? null,
     sampleRate: metadata.format.sampleRate ?? null,
-    coverArtMime: embeddedCoverArt?.format ?? folderCoverArt?.mimeType ?? null,
-    coverArtData: embeddedCoverArt?.data ?? folderCoverArt?.data ?? null,
-    coverArtSource: embeddedCoverArt ? "embedded" : folderCoverArt ? "folder" : null,
+    coverArtMime: trackCoverArt?.mimeType ?? embeddedCoverArt?.format ?? folderCoverArt?.mimeType ?? null,
+    coverArtData: trackCoverArt?.data ?? embeddedCoverArt?.data ?? folderCoverArt?.data ?? null,
+    coverArtSource: trackCoverArt ? "track" : embeddedCoverArt ? "embedded" : folderCoverArt ? "folder" : null,
     musicBrainzReleaseId: typeof native.musicbrainz_releaseid === "string" ? native.musicbrainz_releaseid : null,
     musicBrainzArtistId,
     musicBrainzAlbumArtistId

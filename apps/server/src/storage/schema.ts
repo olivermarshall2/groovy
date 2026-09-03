@@ -1,5 +1,6 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, statSync, statfsSync } from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
 export const openLibraryDatabase = (databasePath: string) => {
@@ -38,6 +39,7 @@ export const openLibraryDatabase = (databasePath: string) => {
       cover_art_id TEXT,
       cover_art_mime TEXT,
       cover_art_data BLOB,
+      artwork_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -184,6 +186,14 @@ export const openLibraryDatabase = (databasePath: string) => {
       media_kind TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS artwork (
+      id TEXT PRIMARY KEY,
+      content_hash TEXT NOT NULL UNIQUE,
+      mime_type TEXT NOT NULL,
+      data BLOB NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
 
   const existingColumns = new Set(
@@ -226,6 +236,10 @@ export const openLibraryDatabase = (databasePath: string) => {
     database.exec("ALTER TABLE tracks ADD COLUMN author TEXT;");
   }
 
+  if (!existingColumns.has("artwork_id")) {
+    database.exec("ALTER TABLE tracks ADD COLUMN artwork_id TEXT;");
+  }
+
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_tracks_artist_id ON tracks (artist_id);
     CREATE INDEX IF NOT EXISTS idx_tracks_album_id ON tracks (album_id);
@@ -237,7 +251,63 @@ export const openLibraryDatabase = (databasePath: string) => {
     CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks (artist);
     CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks (album);
     CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks (album_artist);
+    CREATE INDEX IF NOT EXISTS idx_tracks_artwork_id ON tracks (artwork_id);
   `);
+
+  // Older databases stored the same image blob on every track. Move each unique
+  // image into artwork once, then leave tracks with a lightweight reference.
+  const legacyArtworkTrackIds = database.prepare("SELECT id FROM tracks WHERE cover_art_data IS NOT NULL").all() as Array<{ id: string }>;
+
+  if (legacyArtworkTrackIds.length > 0) {
+    const selectLegacyArtwork = database.prepare("SELECT cover_art_mime, cover_art_data FROM tracks WHERE id = ?");
+    const insertArtwork = database.prepare(`
+      INSERT OR IGNORE INTO artwork (id, content_hash, mime_type, data, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    const migrateTrackArtwork = database.prepare(`
+      UPDATE tracks
+      SET artwork_id = ?, cover_art_mime = NULL, cover_art_data = NULL
+      WHERE id = ?
+    `);
+    const now = new Date().toISOString();
+
+    database.exec("BEGIN IMMEDIATE;");
+    try {
+      for (const { id } of legacyArtworkTrackIds) {
+        const row = selectLegacyArtwork.get(id) as { cover_art_mime: string | null; cover_art_data: Uint8Array } | undefined;
+
+        if (!row?.cover_art_data) {
+          continue;
+        }
+
+        const contentHash = createHash("sha256").update(row.cover_art_data).digest("hex");
+        const artworkId = `artwork:${contentHash}`;
+        insertArtwork.run(artworkId, contentHash, row.cover_art_mime ?? "image/jpeg", row.cover_art_data, now);
+        migrateTrackArtwork.run(artworkId, id);
+      }
+      database.exec("COMMIT;");
+    } catch (error) {
+      database.exec("ROLLBACK;");
+      throw error;
+    }
+
+    // VACUUM is the only way for SQLite to return freed blob pages to disk.
+    // It needs a second database-sized working area, so do not risk startup on
+    // a volume that cannot safely provide it.
+    try {
+      const databaseBytes = statSync(databasePath).size;
+      const filesystem = statfsSync(path.dirname(databasePath));
+      const availableBytes = Number(filesystem.bavail) * Number(filesystem.bsize);
+
+      if (availableBytes >= databaseBytes * 2) {
+        database.exec("VACUUM;");
+      } else {
+        console.warn("Artwork deduplication completed, but database compaction was deferred because the data volume has insufficient free space.");
+      }
+    } catch (error) {
+      console.warn("Artwork deduplication completed, but database compaction was deferred.", error);
+    }
+  }
 
   database.exec(`
     INSERT OR IGNORE INTO user_book_progress_state (user_id, book_id, track_path, position_seconds, updated_at)

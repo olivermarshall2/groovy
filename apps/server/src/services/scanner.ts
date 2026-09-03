@@ -4,7 +4,7 @@ import type { ScanStatus, TrackRecord } from "@mp3-platform/shared";
 import type { LibraryRepository } from "../storage/library-repository.js";
 import { normalizeMediaPath } from "../storage/ids.js";
 import { persistBookStateSidecar, restoreBookStateSidecars } from "./book-state-sidecar.js";
-import { getFolderCoverArtModifiedAt, readAudioMetadata, readFolderCoverArt } from "./tag-reader.js";
+import { getFolderCoverArtModifiedAt, getTrackCoverArtModifiedAt, readAudioMetadata, readFolderCoverArt } from "./tag-reader.js";
 import { syncLibraryArtifacts, type ScannedTrackArtifact } from "./library-artifacts.js";
 import { cronMatches, getCronMinuteKey } from "./cron-schedule.js";
 
@@ -39,12 +39,16 @@ const toArtifactTrack = (track: TrackRecord): ScannedTrackArtifact => ({
   musicBrainzAlbumArtistId: null
 });
 
-const getEffectiveModifiedAt = (fileModifiedAt: string, coverArtModifiedAt: string | null) => {
-  if (!coverArtModifiedAt) {
-    return fileModifiedAt;
+const getEffectiveModifiedAt = (fileModifiedAt: string, ...artworkModifiedAts: Array<string | null>) => {
+  let effectiveModifiedAt = fileModifiedAt;
+
+  for (const artworkModifiedAt of artworkModifiedAts) {
+    if (artworkModifiedAt && artworkModifiedAt > effectiveModifiedAt) {
+      effectiveModifiedAt = artworkModifiedAt;
+    }
   }
 
-  return coverArtModifiedAt > fileModifiedAt ? coverArtModifiedAt : fileModifiedAt;
+  return effectiveModifiedAt;
 };
 
 const areByteArraysEqual = (left: Uint8Array | null | undefined, right: Uint8Array | null | undefined) => {
@@ -157,8 +161,8 @@ export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) 
   const readFileStats = (targetPath: string) =>
     withTimeout(stat(targetPath), FILE_OPERATION_TIMEOUT_MS, "File stat", targetPath);
 
-  const readMetadataWithTimeout = (filePath: string, libraryRoot?: string) =>
-    withTimeout(readAudioMetadata(filePath, libraryRoot), FILE_OPERATION_TIMEOUT_MS, "Metadata read", filePath);
+  const readMetadataWithTimeout = (filePath: string, libraryRoot?: string, fileNames?: readonly string[]) =>
+    withTimeout(readAudioMetadata(filePath, libraryRoot, fileNames), FILE_OPERATION_TIMEOUT_MS, "Metadata read", filePath);
 
   const readFolderCoverArtModifiedAtWithTimeout = (filePath: string, libraryRoot?: string) =>
     withTimeout(getFolderCoverArtModifiedAt(filePath, libraryRoot), FILE_OPERATION_TIMEOUT_MS, "Cover art stat", filePath);
@@ -207,6 +211,7 @@ export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) 
     const audioEntries = entries.filter(
       (entry) => entry.isFile() && AUDIO_EXTENSIONS.has(path.extname(entry.name).toLowerCase())
     );
+    const entryNames = entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
 
     if (audioEntries.length > 0) {
       status.totalFiles += audioEntries.length;
@@ -270,6 +275,18 @@ export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) 
         options?.existingTracksByPath?.get(normalizedPath) ??
         repository.getTrackByFilePath(fullPath);
       const folderPath = path.dirname(fullPath);
+      let trackCoverArtModifiedAt: string | null = null;
+
+      try {
+        trackCoverArtModifiedAt = await withTimeout(
+          getTrackCoverArtModifiedAt(fullPath, entryNames),
+          FILE_OPERATION_TIMEOUT_MS,
+          "Track cover art stat",
+          fullPath
+        );
+      } catch (error) {
+        pushError(fullPath, error instanceof Error ? error.message : "Failed to read track cover art timestamp");
+      }
       let coverArtModifiedAt = folderCoverArtModifiedCache.get(folderPath);
 
       if (coverArtModifiedAt === undefined) {
@@ -283,7 +300,7 @@ export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) 
         folderCoverArtModifiedCache.set(folderPath, coverArtModifiedAt);
       }
 
-      const effectiveModifiedAt = getEffectiveModifiedAt(fileModifiedAt, coverArtModifiedAt);
+      const effectiveModifiedAt = getEffectiveModifiedAt(fileModifiedAt, coverArtModifiedAt, trackCoverArtModifiedAt);
       const cachedFolderCoverArt = folderCoverArtCache.get(folderPath);
       let currentFolderCoverArt: Awaited<ReturnType<typeof readFolderCoverArt>> | null = cachedFolderCoverArt ?? null;
 
@@ -301,7 +318,7 @@ export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) 
 
       if (forcedBook && extension === ".m4b") {
         try {
-          preloadedMetadata = await readMetadataWithTimeout(fullPath, libraryRoot);
+          preloadedMetadata = await readMetadataWithTimeout(fullPath, libraryRoot, entryNames);
         } catch {
           preloadedMetadata = null;
         }
@@ -315,6 +332,7 @@ export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) 
       const bookFolderCoverChanged =
         forcedBook &&
         !!existingTrack &&
+        existingTrack.coverArtId !== existingTrack.id &&
         !prefersEmbeddedBookCover &&
         (
           (currentFolderCoverArt?.mimeType ?? null) !== (storedCoverArt?.mimeType ?? null) ||
@@ -338,7 +356,7 @@ export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) 
         metadata = preloadedMetadata;
       } else {
         try {
-          metadata = await readMetadataWithTimeout(fullPath, libraryRoot);
+          metadata = await readMetadataWithTimeout(fullPath, libraryRoot, entryNames);
         } catch (error) {
           metadata = {
             title: null,
@@ -368,24 +386,23 @@ export const createScanner = ({ repository, discogsAuth }: ScannerDependencies) 
       }
 
       if (forcedBook) {
+        const useTrackSpecificCover = metadata.coverArtSource === "track";
         const useEmbeddedM4bCover = extension === ".m4b" && metadata.coverArtSource === "embedded";
         metadata = {
           ...metadata,
           mediaKind: "book" as const,
           bookTitle: metadata.bookTitle ?? metadata.album ?? path.basename(path.dirname(fullPath)),
-          coverArtMime: useEmbeddedM4bCover ? metadata.coverArtMime : currentFolderCoverArt?.mimeType ?? metadata.coverArtMime,
-          coverArtData: useEmbeddedM4bCover ? metadata.coverArtData : currentFolderCoverArt?.data ?? metadata.coverArtData
+          coverArtMime: useTrackSpecificCover || useEmbeddedM4bCover ? metadata.coverArtMime : currentFolderCoverArt?.mimeType ?? metadata.coverArtMime,
+          coverArtData: useTrackSpecificCover || useEmbeddedM4bCover ? metadata.coverArtData : currentFolderCoverArt?.data ?? metadata.coverArtData
         };
       }
-
-      const { coverArtSource: _coverArtSource, ...persistedMetadata } = metadata;
 
       repository.upsertTrack({
         filePath: fullPath,
         format: extension.slice(1),
         modifiedAt: effectiveModifiedAt,
         sizeBytes: fileStats.size,
-        ...persistedMetadata
+        ...metadata
       });
       collectedTracks.push({
         filePath: fullPath,

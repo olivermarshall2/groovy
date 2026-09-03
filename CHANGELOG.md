@@ -2,6 +2,22 @@
 
 All notable project changes should be recorded here. Keep the newest entry at the top.
 
+## 0.34.0 - 2026-09-03
+
+### Changed
+
+- Replaced duplicated per-track artwork BLOB storage with SHA-256-addressed shared artwork records. Existing databases are backfilled once on deployment and compacted when the Docker data volume has sufficient free space.
+- Added explicit track artwork overrides: a file named exactly like its audio file, such as `Track 3.jpg` next to `Track 3.mp3`, takes precedence for that track. Folder artwork remains the album or book art; embedded M4B art remains available when no track-specific image exists.
+- Bumped the server build version to `0.1.5`.
+
+## 0.33.0 - 2026-09-02
+
+### Fixed
+
+- Made Android library refreshes single-flight so pull-to-refresh cannot overlap an active sync and overload the Docker server.
+- Changed routine refreshes to fetch only the summary, Books, and Likes first. Albums, playlists, and the large Tracks payload now reload only after the server scan timestamp changes.
+- Preserved fast Books and cover-art updates during a partial response instead of letting concurrent catalogue requests delay them and trigger a false server-unavailable notice.
+
 ## 0.32.0 - 2026-09-02
 
 ### Fixed

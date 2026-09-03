@@ -13,6 +13,7 @@ import type {
   ScanRecord,
   TrackRecord
 } from "@mp3-platform/shared";
+import { createHash } from "node:crypto";
 import { createSessionExpiry, createSessionToken, hashPassword, hashSessionToken, verifyPassword } from "../services/auth.js";
 import { normalizeGenreValue } from "../services/genre.js";
 import { openLibraryDatabase } from "./schema.js";
@@ -21,6 +22,7 @@ import { createStableId, normalizeMediaPath } from "./ids.js";
 type TrackUpsert = Omit<TrackRecord, "id" | "coverArtId" | "artistId" | "albumId" | "albumArtistId"> & {
   coverArtMime: string | null;
   coverArtData: Uint8Array | null;
+  coverArtSource: "embedded" | "folder" | "track" | null;
 };
 
 type UserSession = {
@@ -252,8 +254,8 @@ export const createLibraryRepository = (databasePath: string) => {
       id, file_path, normalized_file_path, format, title, media_kind, book_id, book_title, author, artist, artist_id, album, album_id,
       album_artist, album_artist_id, genre, year, disc_number, track_number,
       duration_seconds, bitrate, sample_rate, modified_at, size_bytes, cover_art_id,
-      cover_art_mime, cover_art_data, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      cover_art_mime, cover_art_data, artwork_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(normalized_file_path) DO UPDATE SET
       id = excluded.id,
       file_path = excluded.file_path,
@@ -281,6 +283,7 @@ export const createLibraryRepository = (databasePath: string) => {
       cover_art_id = excluded.cover_art_id,
       cover_art_mime = excluded.cover_art_mime,
       cover_art_data = excluded.cover_art_data,
+      artwork_id = excluded.artwork_id,
       updated_at = excluded.updated_at
   `);
   const selectTrackById = database.prepare("SELECT * FROM tracks WHERE id = ?");
@@ -318,7 +321,8 @@ export const createLibraryRepository = (databasePath: string) => {
   const selectAlbums = database.prepare(`
     SELECT album_id AS id, album_artist_id AS artist_id, COALESCE(album_artist, artist, '${UNKNOWN_ARTIST}') AS artist,
       COALESCE(album, '${UNKNOWN_ALBUM}') AS name, COUNT(*) AS song_count,
-      COALESCE(SUM(duration_seconds), 0) AS duration_seconds, MAX(cover_art_id) AS cover_art_id
+      COALESCE(SUM(duration_seconds), 0) AS duration_seconds,
+      COALESCE(MAX(CASE WHEN cover_art_id = album_id THEN cover_art_id END), MAX(cover_art_id)) AS cover_art_id
     FROM tracks
     WHERE media_kind = 'music'
     GROUP BY album_id, album_artist_id, COALESCE(album_artist, artist, '${UNKNOWN_ARTIST}'), COALESCE(album, '${UNKNOWN_ALBUM}')
@@ -331,7 +335,7 @@ export const createLibraryRepository = (databasePath: string) => {
       COALESCE(NULLIF(tracks.author, ''), tracks.artist, tracks.album_artist, '${UNKNOWN_ARTIST}') AS author,
       COUNT(*) AS track_count,
       COALESCE(SUM(tracks.duration_seconds), 0) AS duration_seconds,
-      MAX(tracks.cover_art_id) AS cover_art_id,
+      COALESCE(MAX(CASE WHEN tracks.cover_art_id = tracks.book_id THEN tracks.cover_art_id END), MAX(tracks.cover_art_id)) AS cover_art_id,
       progress.updated_at AS last_listened_at,
       progress.track_path AS last_track_path,
       progress.position_seconds AS last_position_seconds
@@ -355,24 +359,45 @@ export const createLibraryRepository = (databasePath: string) => {
   const insertScan = database.prepare("INSERT INTO scans (completed_at, reason) VALUES (?, ?)");
   const selectAllTrackedPaths = database.prepare("SELECT normalized_file_path FROM tracks");
   const deleteTrackByNormalizedPath = database.prepare("DELETE FROM tracks WHERE normalized_file_path = ?");
-  const selectCoverArtForTrack = database.prepare("SELECT cover_art_mime, cover_art_data FROM tracks WHERE id = ? AND cover_art_data IS NOT NULL");
-  const selectCoverArtForAlbum = database.prepare("SELECT cover_art_mime, cover_art_data FROM tracks WHERE album_id = ? AND cover_art_data IS NOT NULL LIMIT 1");
-  const selectCoverArtForBook = database.prepare("SELECT cover_art_mime, cover_art_data FROM tracks WHERE book_id = ? AND cover_art_data IS NOT NULL LIMIT 1");
-  const selectCoverArtForArtist = database.prepare(`
-    SELECT cover_art_mime, cover_art_data
-    FROM tracks
-    WHERE (artist_id = ? OR album_artist_id = ?)
-      AND cover_art_data IS NOT NULL
+  const insertArtwork = database.prepare(`
+    INSERT OR IGNORE INTO artwork (id, content_hash, mime_type, data, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  const selectCoverArtForTrack = database.prepare(`
+    SELECT artwork.mime_type AS cover_art_mime, artwork.data AS cover_art_data
+    FROM tracks JOIN artwork ON artwork.id = tracks.artwork_id
+    WHERE tracks.id = ? LIMIT 1
+  `);
+  const selectCoverArtForAlbum = database.prepare(`
+    SELECT artwork.mime_type AS cover_art_mime, artwork.data AS cover_art_data
+    FROM tracks JOIN artwork ON artwork.id = tracks.artwork_id
+    WHERE tracks.album_id = ?
+    ORDER BY CASE WHEN tracks.cover_art_id = tracks.album_id THEN 0 ELSE 1 END
     LIMIT 1
   `);
-  const selectCoverArtTrackPathForTrack = database.prepare("SELECT file_path FROM tracks WHERE id = ? AND cover_art_data IS NOT NULL LIMIT 1");
-  const selectCoverArtTrackPathForAlbum = database.prepare("SELECT file_path FROM tracks WHERE album_id = ? AND cover_art_data IS NOT NULL LIMIT 1");
-  const selectCoverArtTrackPathForBook = database.prepare("SELECT file_path FROM tracks WHERE book_id = ? AND cover_art_data IS NOT NULL LIMIT 1");
+  const selectCoverArtForBook = database.prepare(`
+    SELECT artwork.mime_type AS cover_art_mime, artwork.data AS cover_art_data
+    FROM tracks JOIN artwork ON artwork.id = tracks.artwork_id
+    WHERE tracks.book_id = ?
+    ORDER BY CASE WHEN tracks.cover_art_id = tracks.book_id THEN 0 ELSE 1 END
+    LIMIT 1
+  `);
+  const selectCoverArtForArtist = database.prepare(`
+    SELECT artwork.mime_type AS cover_art_mime, artwork.data AS cover_art_data
+    FROM tracks JOIN artwork ON artwork.id = tracks.artwork_id
+    WHERE (artist_id = ? OR album_artist_id = ?)
+    ORDER BY CASE WHEN cover_art_id = album_id THEN 0 ELSE 1 END
+    LIMIT 1
+  `);
+  const selectCoverArtTrackPathForTrack = database.prepare("SELECT file_path FROM tracks WHERE id = ? AND artwork_id IS NOT NULL LIMIT 1");
+  const selectCoverArtTrackPathForAlbum = database.prepare("SELECT file_path FROM tracks WHERE album_id = ? AND artwork_id IS NOT NULL ORDER BY CASE WHEN cover_art_id = album_id THEN 0 ELSE 1 END LIMIT 1");
+  const selectCoverArtTrackPathForBook = database.prepare("SELECT file_path FROM tracks WHERE book_id = ? AND artwork_id IS NOT NULL ORDER BY CASE WHEN cover_art_id = book_id THEN 0 ELSE 1 END LIMIT 1");
   const selectCoverArtTrackPathForArtist = database.prepare(`
     SELECT file_path
     FROM tracks
     WHERE (artist_id = ? OR album_artist_id = ?)
-      AND cover_art_data IS NOT NULL
+      AND artwork_id IS NOT NULL
+    ORDER BY CASE WHEN cover_art_id = album_id THEN 0 ELSE 1 END
     LIMIT 1
   `);
   const deleteAllTracks = database.prepare("DELETE FROM tracks");
@@ -396,7 +421,7 @@ export const createLibraryRepository = (databasePath: string) => {
       media_kind = ?,
       book_id = ?,
       book_title = ?,
-      cover_art_id = CASE WHEN cover_art_data IS NOT NULL THEN ? ELSE NULL END,
+      cover_art_id = CASE WHEN artwork_id IS NOT NULL THEN ? ELSE NULL END,
       updated_at = ?
     WHERE album_id = ?
   `);
@@ -940,8 +965,27 @@ export const createLibraryRepository = (databasePath: string) => {
       const bookTitle = mediaKind === "book" ? track.bookTitle ?? albumName : null;
       const bookId = mediaKind === "book" && bookTitle ? createBookId(bookAuthorName, bookTitle) : null;
       const id = createStableId("track", normalizedFilePath);
-      const coverArtId = track.coverArtData ? (mediaKind === "book" ? bookId : albumId) : null;
+      const artworkId = track.coverArtData
+        ? `artwork:${createHash("sha256").update(track.coverArtData).digest("hex")}`
+        : null;
+      const coverArtId = artworkId
+        ? track.coverArtSource === "track"
+          ? id
+          : mediaKind === "book"
+            ? bookId
+            : albumId
+        : null;
       const normalizedGenre = normalizeGenreValue(track.genre);
+
+      if (artworkId && track.coverArtData) {
+        insertArtwork.run(
+          artworkId,
+          artworkId.slice("artwork:".length),
+          track.coverArtMime ?? "image/jpeg",
+          track.coverArtData,
+          now
+        );
+      }
 
       insertTrack.run(
         id,
@@ -969,8 +1013,9 @@ export const createLibraryRepository = (databasePath: string) => {
         track.modifiedAt,
         track.sizeBytes,
         coverArtId,
-        track.coverArtMime,
-        track.coverArtData,
+        null,
+        null,
+        artworkId,
         now,
         now
       );
